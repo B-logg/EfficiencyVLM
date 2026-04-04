@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 # 설정 및 초기화
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
-SAVE_DIR = "./vision_embeddings"       # 임베딩 파일 저장 경로
+SAVE_DIR = "./qwen_vision_embeddings"       # 임베딩 파일 저장 경로
 LOG_DIR = "./runs/qwen_vl_experiment"  # 텐서보드 로그
 
 os.makedirs(SAVE_DIR, exist_ok=True)

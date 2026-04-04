@@ -9,7 +9,7 @@ from tqdm import tqdm
 # 1. 설정
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 LOG_DIR = "./runs/cached_test"       # Cached 실험 로그
-EMBED_DIR = "./vision_embeddings"    # pt 파일 경로
+EMBED_DIR = "./qwen_vision_embeddings"    # pt 파일 경로
 NUM_TEST_SAMPLES = 500               # 실험할 이미지 개수
 
 writer = SummaryWriter(log_dir=LOG_DIR)
