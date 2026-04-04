@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 SAVE_DIR = "./llava_vision_embeddings"
-LOG_DIR = "./runs/llava_encoding"
+LOG_DIR = "./runs/llava_encoding_real"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 writer = SummaryWriter(log_dir=LOG_DIR)
