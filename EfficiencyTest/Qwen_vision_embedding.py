@@ -58,25 +58,14 @@ with torch.no_grad():
         
         # Qwen2-VL의 Vision Encoder만 호출
         # pixel_values와 grid_thw(해상도 정보)를 전달
-        if hasattr(model, 'visual'):
-            vision_encoder = model.visual
-        elif hasattr(model, 'vision_tower'):
-            vision_encoder = model.vision_tower
-        elif hasattr(model, 'model') and hasattr(model.model, 'vision_tower'):
-            vision_encoder = model.model.vision_tower
-        else:
-            # 만약 위 이름들로도 못 찾는다면 모델 구조를 전부 출력해서 직접 확인합니다.
-            print("\n=== 현재 로드된 모델의 구조 ===")
-            print(model)
-            raise AttributeError("Vision Encoder의 정확한 변수명을 찾지 못했습니다. 터미널에 출력된 모델 구조를 확인해주세요!")
 
-        # 2. Vision Encoder 통과 (버전에 따라 반환값이 튜플일 수 있으므로 안전하게 처리)
+        vision_encoder = model.model.visual
+
         vision_outputs = vision_encoder(
-            inputs.pixel_values.to(torch.bfloat16), 
-            grid_thw=inputs.image_grid_thw
+            inputs["pixel_values"].to(device, dtype=torch.bfloat16), 
+            grid_thw=inputs["image_grid_thw"].to(device)
         )
         
-        # 만약 반환값이 튜플이나 객체라면 첫 번째 텐서(hidden_states)만 추출
         if isinstance(vision_outputs, tuple):
             image_embeds = vision_outputs[0]
         elif hasattr(vision_outputs, 'last_hidden_state'):
@@ -89,7 +78,11 @@ with torch.no_grad():
         
         # CPU로 옮겨서 저장 (.pt 포맷)
         save_path = os.path.join(SAVE_DIR, f"embed_{image_id}.pt")
-        torch.save(image_embeds.cpu(), save_path)
+        save_data = {
+            "embeds": image_embeds.cpu(),
+            "grid_thw": inputs["image_grid_thw"].cpu()
+        }
+        torch.save(save_data, save_path)
         
         # 텐서보드 로깅
         # 1. 이미지 1장당 인코딩 소요 시간
@@ -97,8 +90,9 @@ with torch.no_grad():
         
         # 2. 현재 VRAM 사용량 (MB)
         if torch.cuda.is_available():
-            vram_allocated = torch.cuda.memory_allocated() / (1024 ** 2)
-            writer.add_scalar('Memory/VRAM_Allocated_MB', vram_allocated, idx)
+            vram_peak = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            writer.add_scalar('Memory/VRAM_Peak_MB', vram_peak, idx)
+            torch.cuda.reset_peak_memory_stats() # 초기화
 
 total_time = time.time() - start_total_time
 
