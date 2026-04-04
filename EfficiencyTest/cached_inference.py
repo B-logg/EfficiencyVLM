@@ -43,9 +43,6 @@ with torch.no_grad():
         grid_thw = saved_data["grid_thw"].to(device)
 
         if image_embeds.shape[-1] == 1280:
-            # 2x2(4개) 패치씩 묶기 (1380개 -> 345개, 1280차원 -> 5120차원)
-            image_embeds = image_embeds.view(-1, 4, 1280).view(-1, 5120)
-            # 모델 내부의 PatchMerger 통과시켜 LLM 차원(1536)으로 투영
             image_embeds = model.model.visual.merger(image_embeds)
         
         N_patches = image_embeds.shape[0] # 비전 토큰 개수
