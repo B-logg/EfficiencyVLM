@@ -49,30 +49,11 @@ with torch.no_grad():
         prompt = "USER: <image>\nDescribe this image in detail.\nASSISTANT:"
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         input_ids = inputs.input_ids
-        attention_mask = inputs.attention_mask
-        
-        if hasattr(model, 'language_model'):
-            llm_backbone = model.language_model
-        elif hasattr(model, 'text_model'):
-            llm_backbone = model.text_model
-        elif hasattr(model, 'model') and hasattr(model.model, 'text_model'):
-            llm_backbone = model.model.text_model
-        else:
-            llm_backbone = model
-            
-        if hasattr(llm_backbone, 'get_input_embeddings'):
-            embed_layer = llm_backbone.get_input_embeddings()
-        else:
-            embed_layer = model.get_input_embeddings()
+        attention_mask = inputs.attention_mask 
+       
+        llm_backbone = model
+        embed_layer = llm_backbone.get_input_embeddings()
 
-        if hasattr(model, 'language_model'):
-            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model.language_model' 을 사용합니다!\n")
-        elif hasattr(model, 'text_model'):
-            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model.text_model' 을 사용합니다!\n")
-        elif hasattr(model, 'model') and hasattr(model.model, 'text_model'):
-            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model.model.text_model' 을 사용합니다!\n")
-        else:
-            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model' 자체를 사용합니다!\n")
 
         # 임베딩 레이어로 텍스트를 벡터화
         inputs_embeds = embed_layer(input_ids)
