@@ -38,8 +38,17 @@ with torch.no_grad():
         inputs = processor.image_processor(images=image, return_tensors="pt")
         pixel_values = inputs.pixel_values.to(device, dtype=torch.bfloat16)
         
-        # LLaVA의 Vision Tower + MLP Projector를 한 번에 통과 (결과 shape: [1, 576, 4096])
-        image_embeds = model.get_image_features(pixel_values)
+        # Vision Tower 통과
+        vision_outputs = model.vision_tower(pixel_values, output_hidden_states=True)
+        
+        # 끝에서 두 번째 레이어의 feature를 사용
+        selected_features = vision_outputs.hidden_states[-2]
+        
+        # 577개의 토큰 중 0번째인 CLS 토큰을 제거하고 576개의 순수 이미지 패치만 남깁니다.
+        selected_features = selected_features[:, 1:]
+        
+        # MLP Projector 통과 (CLIP 차원 1024 -> LLaMA 차원 4096으로 투영)
+        image_embeds = model.multi_modal_projector(selected_features)
         
         process_time = time.time() - start_time
         
