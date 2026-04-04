@@ -8,13 +8,13 @@ from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 LOG_DIR = "./runs/llava_cached_test"
-EMBED_DIR = "./llava_vision_embeddings"
-NUM_TEST_SAMPLES = 100
+EMBED_DIR = "./llava_vision_embeddings" 
+NUM_TEST_SAMPLES = 500
 
 writer = SummaryWriter(log_dir=LOG_DIR)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-print("Loading LLaVA LLM Backbone...")
+print("Loading LLaVA LLM Backbone & Projector...")
 model = LlavaForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype=torch.bfloat16, device_map=device
 ).eval()
@@ -35,33 +35,33 @@ with torch.no_grad():
         if not os.path.exists(pt_path):
             continue
             
-        # 1. 캐싱된 576개의 시각 토큰 임베딩 로드
-        image_embeds = torch.load(pt_path).to(device, dtype=torch.bfloat16) # shape: [1, 576, 4096]
+        # 1. 캐싱된 1024차원 순수 시각 토큰 로드
+        selected_features = torch.load(pt_path).to(device, dtype=torch.bfloat16)
         
         torch.cuda.reset_peak_memory_stats()
         start_time = time.time()
-        
-        # 2. 텍스트 프롬프트 토큰화
+
+        # 추론 시점에 Projector 통과시키기
+        v_proj = model.multi_modal_projector if hasattr(model, 'multi_modal_projector') else model.model.multi_modal_projector
+        image_embeds = v_proj(selected_features) 
+
+
         prompt = "USER: <image>\nDescribe this image in detail.\nASSISTANT:"
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
         input_ids = inputs.input_ids
         attention_mask = inputs.attention_mask
         
-        # 3. 텍스트를 기본 임베딩으로 변환
         inputs_embeds = model.language_model.get_input_embeddings()(input_ids)
         
-        # 4. 모달리티 결합 (수동 Injection)
-        # input_ids에서 <image> 토큰(32000)의 위치를 찾음
         image_idx = torch.where(input_ids == image_token_id)[1][0]
         
-        # <image> 토큰을 기점으로 앞, 뒤 텍스트 임베딩을 분리하고 사이에 시각 임베딩을 끼워 넣음
+        # 모달리티 결합
         final_embeds = torch.cat([
             inputs_embeds[:, :image_idx, :],
             image_embeds,
             inputs_embeds[:, image_idx+1:, :]
         ], dim=1)
         
-        # attention_mask도 늘어난 토큰 수(576개)에 맞게 확장
         image_mask = torch.ones((1, image_embeds.shape[1]), dtype=attention_mask.dtype, device=device)
         final_mask = torch.cat([
             attention_mask[:, :image_idx],
@@ -69,7 +69,6 @@ with torch.no_grad():
             attention_mask[:, image_idx+1:]
         ], dim=1)
         
-        # 5. 오직 언어 모델(LLaMA)만 구동하여 추론
         outputs = model.language_model.generate(
             inputs_embeds=final_embeds,
             attention_mask=final_mask,
@@ -87,5 +86,5 @@ with torch.no_grad():
         writer.add_scalar('Metrics/2_Peak_VRAM_MB', vram_peak, idx)
         writer.add_scalar('Metrics/3_Tokens_Per_Sec', tokens_per_sec, idx)
 
-print(f"✅ LLaVA Cached 순수 모델 연산 총 소요 시간: {total_pure_inference_time:.2f}초")
+print(f"총 소요 시간: {total_pure_inference_time:.2f}초")
 writer.close()

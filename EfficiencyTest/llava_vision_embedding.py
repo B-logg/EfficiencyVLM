@@ -6,10 +6,9 @@ from transformers import LlavaForConditionalGeneration, AutoProcessor
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-# 1. 설정
 MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 SAVE_DIR = "./llava_vision_embeddings"
-LOG_DIR = "./runs/llava_encode_experiment"
+LOG_DIR = "./runs/llava_encoding"
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 writer = SummaryWriter(log_dir=LOG_DIR)
@@ -20,11 +19,9 @@ model = LlavaForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype=torch.bfloat16, device_map=device
 ).eval()
 processor = AutoProcessor.from_pretrained(MODEL_ID)
-
 dataset = load_dataset("detection-datasets/coco", split="val", trust_remote_code=True)
 
-# 2. Vision Encoding (Projector까지 통과)
-print("Starting LLaVA Vision Encoding Process")
+print("Starting LLaVA Pure Vision Encoding Process...")
 start_total_time = time.time()
 
 with torch.no_grad():
@@ -34,46 +31,29 @@ with torch.no_grad():
         
         start_time = time.time()
         
-        # 프로세서로 이미지를 336x336 텐서로 변환
         inputs = processor.image_processor(images=image, return_tensors="pt")
         pixel_values = inputs.pixel_values.to(device, dtype=torch.bfloat16)
         
-        if hasattr(model, 'vision_tower') and hasattr(model, 'multi_modal_projector'):
-            vision_tower = model.vision_tower
-            projector = model.multi_modal_projector
-        elif hasattr(model, 'model') and hasattr(model.model, 'vision_tower'):
-            vision_tower = model.model.vision_tower
-            projector = model.model.multi_modal_projector
-        else:
-            print("\n=== 현재 로드된 모델의 구조 ===")
-            print(model)
-            raise AttributeError("Vision Tower 모듈을 찾지 못했습니다. 출력된 구조를 확인해주세요!")
+        # 동적 탐색
+        v_tower = model.vision_tower if hasattr(model, 'vision_tower') else model.model.vision_tower
 
-
-        # Vision Tower 통과
-        vision_outputs = vision_tower(pixel_values, output_hidden_states=True)
+        # 1. Vision Tower 통과
+        vision_outputs = v_tower(pixel_values, output_hidden_states=True)
         
-        # 끝에서 두 번째 레이어의 feature를 사용
-        selected_features = vision_outputs.hidden_states[-2]
-        
-        # 577개의 토큰 중 0번째인 CLS 토큰을 제거하고 576개의 순수 이미지 패치만 남깁니다.
-        selected_features = selected_features[:, 1:]
-        
-        # MLP Projector 통과 (CLIP 차원 1024 -> LLaMA 차원 4096으로 투영)
-        image_embeds = projector(selected_features)
+        # 2. 특징 추출 -> shape: [1, 576, 1024]
+        selected_features = vision_outputs.hidden_states[-2][:, 1:]
         
         process_time = time.time() - start_time
         
+        # 3. 1024차원의 가벼운 순수 텐서 저장
         save_path = os.path.join(SAVE_DIR, f"embed_{image_id}.pt")
-        torch.save(image_embeds.cpu(), save_path)
+        torch.save(selected_features.cpu(), save_path)
         
-        # 로깅
         writer.add_scalar('Performance/Encoding_Time_per_Image', process_time, idx)
         if torch.cuda.is_available():
-            vram_peak = torch.cuda.max_memory_allocated() / (1024 ** 2)
-            writer.add_scalar('Memory/VRAM_Peak_MB', vram_peak, idx)
+            writer.add_scalar('Memory/VRAM_Peak_MB', torch.cuda.max_memory_allocated() / (1024 ** 2), idx)
             torch.cuda.reset_peak_memory_stats()
 
 total_time = time.time() - start_total_time
-print(f"LLaVA 토큰화 완료! 총 소요 시간: {total_time:.2f}초")
+print(f"총 소요 시간: {total_time:.2f}초")
 writer.close()

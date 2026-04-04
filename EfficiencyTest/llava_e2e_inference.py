@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-1.5-7b-hf"
 LOG_DIR = "./runs/llava_e2e_test"
-NUM_TEST_SAMPLES = 100
+NUM_TEST_SAMPLES = 500
 
 writer = SummaryWriter(log_dir=LOG_DIR)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -49,7 +49,6 @@ with torch.no_grad():
         total_pure_inference_time += inference_time
         
         # 입력 길이(프롬프트)를 제외한 순수 생성 토큰 수 계산
-        # LLaVA HF processor는 <image>를 내부적으로 처리하므로, 출력 길이 비교가 직관적입니다.
         input_len = inputs["input_ids"].shape[1]
         generated_tokens = outputs.shape[1] - input_len
         
@@ -60,5 +59,5 @@ with torch.no_grad():
         writer.add_scalar('Metrics/2_Peak_VRAM_MB', vram_peak, idx)
         writer.add_scalar('Metrics/3_Tokens_Per_Sec', tokens_per_sec, idx)
 
-print(f"✅ LLaVA E2E 순수 모델 연산 총 소요 시간: {total_pure_inference_time:.2f}초")
+print(f"LLaVA E2E 순수 모델 연산 총 소요 시간: {total_pure_inference_time:.2f}초")
 writer.close()
