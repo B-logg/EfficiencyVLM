@@ -35,7 +35,7 @@ with torch.no_grad():
         start_time = time.time()
         
         # 프로세서로 이미지를 336x336 텐서로 변환
-        inputs = processor(images=image, return_tensors="pt")
+        inputs = processor.image_processor(images=image, return_tensors="pt")
         pixel_values = inputs.pixel_values.to(device, dtype=torch.bfloat16)
         
         # LLaVA의 Vision Tower + MLP Projector를 한 번에 통과 (결과 shape: [1, 576, 4096])
