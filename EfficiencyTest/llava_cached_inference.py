@@ -51,7 +51,22 @@ with torch.no_grad():
         input_ids = inputs.input_ids
         attention_mask = inputs.attention_mask
         
-        inputs_embeds = model.language_model.get_input_embeddings()(input_ids)
+        if hasattr(model, 'language_model'):
+            llm_backbone = model.language_model
+        elif hasattr(model, 'text_model'):
+            llm_backbone = model.text_model
+        elif hasattr(model, 'model') and hasattr(model.model, 'text_model'):
+            llm_backbone = model.model.text_model
+        else:
+            llm_backbone = model
+            
+        if hasattr(llm_backbone, 'get_input_embeddings'):
+            embed_layer = llm_backbone.get_input_embeddings()
+        else:
+            embed_layer = model.get_input_embeddings()
+
+        # 임베딩 레이어로 텍스트를 벡터화
+        inputs_embeds = embed_layer(input_ids)
         
         image_idx = torch.where(input_ids == image_token_id)[1][0]
         
@@ -69,7 +84,7 @@ with torch.no_grad():
             attention_mask[:, image_idx+1:]
         ], dim=1)
         
-        outputs = model.language_model.generate(
+        outputs = llm_backbone.generate(
             inputs_embeds=final_embeds,
             attention_mask=final_mask,
             max_new_tokens=64
