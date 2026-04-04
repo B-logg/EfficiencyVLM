@@ -58,10 +58,31 @@ with torch.no_grad():
         
         # Qwen2-VL의 Vision Encoder만 호출
         # pixel_values와 grid_thw(해상도 정보)를 전달
-        image_embeds = model.visual(
+        if hasattr(model, 'visual'):
+            vision_encoder = model.visual
+        elif hasattr(model, 'vision_tower'):
+            vision_encoder = model.vision_tower
+        elif hasattr(model, 'model') and hasattr(model.model, 'vision_tower'):
+            vision_encoder = model.model.vision_tower
+        else:
+            # 만약 위 이름들로도 못 찾는다면 모델 구조를 전부 출력해서 직접 확인합니다.
+            print("\n=== 현재 로드된 모델의 구조 ===")
+            print(model)
+            raise AttributeError("Vision Encoder의 정확한 변수명을 찾지 못했습니다. 터미널에 출력된 모델 구조를 확인해주세요!")
+
+        # 2. Vision Encoder 통과 (버전에 따라 반환값이 튜플일 수 있으므로 안전하게 처리)
+        vision_outputs = vision_encoder(
             inputs.pixel_values.to(torch.bfloat16), 
             grid_thw=inputs.image_grid_thw
         )
+        
+        # 만약 반환값이 튜플이나 객체라면 첫 번째 텐서(hidden_states)만 추출
+        if isinstance(vision_outputs, tuple):
+            image_embeds = vision_outputs[0]
+        elif hasattr(vision_outputs, 'last_hidden_state'):
+            image_embeds = vision_outputs.last_hidden_state
+        else:
+            image_embeds = vision_outputs
         
         # 시간 측정 종료
         process_time = time.time() - start_time
