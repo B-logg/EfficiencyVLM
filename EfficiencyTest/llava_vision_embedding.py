@@ -51,7 +51,7 @@ with torch.no_grad():
 
 
         # Vision Tower 통과
-        vision_outputs = model.vision_tower(pixel_values, output_hidden_states=True)
+        vision_outputs = vision_tower(pixel_values, output_hidden_states=True)
         
         # 끝에서 두 번째 레이어의 feature를 사용
         selected_features = vision_outputs.hidden_states[-2]
@@ -60,7 +60,7 @@ with torch.no_grad():
         selected_features = selected_features[:, 1:]
         
         # MLP Projector 통과 (CLIP 차원 1024 -> LLaMA 차원 4096으로 투영)
-        image_embeds = model.multi_modal_projector(selected_features)
+        image_embeds = projector(selected_features)
         
         process_time = time.time() - start_time
         
