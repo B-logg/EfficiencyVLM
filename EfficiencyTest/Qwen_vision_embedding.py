@@ -1,5 +1,5 @@
 import os
-importtime
+import time
 import torch
 from datasets import load_dataset
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
