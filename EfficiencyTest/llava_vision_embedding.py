@@ -38,6 +38,18 @@ with torch.no_grad():
         inputs = processor.image_processor(images=image, return_tensors="pt")
         pixel_values = inputs.pixel_values.to(device, dtype=torch.bfloat16)
         
+        if hasattr(model, 'vision_tower') and hasattr(model, 'multi_modal_projector'):
+            vision_tower = model.vision_tower
+            projector = model.multi_modal_projector
+        elif hasattr(model, 'model') and hasattr(model.model, 'vision_tower'):
+            vision_tower = model.model.vision_tower
+            projector = model.model.multi_modal_projector
+        else:
+            print("\n=== 현재 로드된 모델의 구조 ===")
+            print(model)
+            raise AttributeError("Vision Tower 모듈을 찾지 못했습니다. 출력된 구조를 확인해주세요!")
+
+
         # Vision Tower 통과
         vision_outputs = model.vision_tower(pixel_values, output_hidden_states=True)
         
