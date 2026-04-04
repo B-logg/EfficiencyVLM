@@ -65,6 +65,15 @@ with torch.no_grad():
         else:
             embed_layer = model.get_input_embeddings()
 
+        if hasattr(model, 'language_model'):
+            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model.language_model' 을 사용합니다!\n")
+        elif hasattr(model, 'text_model'):
+            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model.text_model' 을 사용합니다!\n")
+        elif hasattr(model, 'model') and hasattr(model.model, 'text_model'):
+            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model.model.text_model' 을 사용합니다!\n")
+        else:
+            print("\n🎯 [정답 확인] 선생님의 환경에서는 'model' 자체를 사용합니다!\n")
+
         # 임베딩 레이어로 텍스트를 벡터화
         inputs_embeds = embed_layer(input_ids)
         
