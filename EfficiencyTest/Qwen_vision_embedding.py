@@ -54,7 +54,7 @@ with torch.no_grad():
         start_time = time.time()
         
         # 프로세서를 통해 이미지를 모델 입력 형태로 변환
-        inputs = processor(images=image, return_tensors="pt").to(device)
+        inputs = processor.image_processor(images=image, return_tensors="pt").to(device)
         
         # Qwen2-VL의 Vision Encoder만 호출
         # pixel_values와 grid_thw(해상도 정보)를 전달
