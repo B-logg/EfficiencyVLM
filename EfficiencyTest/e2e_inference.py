@@ -25,6 +25,8 @@ dataset = load_dataset("detection-datasets/coco", split=f"val[:{NUM_TEST_SAMPLES
 # 2. E2E 추론 실험 시작
 print("Starting E2E Inference")
 
+total_inference_time = 0.0
+
 with torch.no_grad():
     for idx, data in enumerate(tqdm(dataset)):
         image = data['image'].convert("RGB") if data['image'].mode != "RGB" else data['image']
@@ -47,6 +49,8 @@ with torch.no_grad():
         # 소요 시간 및 생성된 텍스트 토큰 수 계산
         inference_time = time.time() - start_time
         generated_tokens = outputs.shape[1] - inputs.input_ids.shape[1]
+
+        total_inference_time += inference_time
         tokens_per_sec = generated_tokens / inference_time
         vram_peak = torch.cuda.max_memory_allocated() / (1024 ** 2)
 
@@ -55,4 +59,5 @@ with torch.no_grad():
         writer.add_scalar('Metrics/2_Peak_VRAM_MB', vram_peak, idx)
         writer.add_scalar('Metrics/3_Tokens_Per_Sec', tokens_per_sec, idx)
 
+print(f"모델 연산 추론 총 소요 시간: {total_inference_time:.2f}초")
 writer.close()
