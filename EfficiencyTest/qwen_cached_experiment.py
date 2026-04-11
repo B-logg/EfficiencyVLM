@@ -35,7 +35,7 @@ class TTFTLogitsProcessor(LogitsProcessor):
             self.is_first = False
         return scores
 
-print("Loading Qwen Model & Tokenizer...")
+print("Loading Qwen Model & Tokenizer")
 model = Qwen2VLForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype=torch.bfloat16, device_map=device
 ).eval()
@@ -51,7 +51,7 @@ if torch.cuda.is_available():
 sum_times = {k: 0.0 for k in ['db', 'text', 'mlp', 'fusion', 'gen', 'ttft', 'decode', 'latency']}
 processed_count = 0
 
-print("Starting Qwen Cached Inference...")
+print("Starting Qwen Cached Inference")
 with torch.no_grad():
     for idx, data in enumerate(tqdm(dataset)):
         image_id = data['image_id']
@@ -71,10 +71,21 @@ with torch.no_grad():
         grid_thw = saved_data["grid_thw"].to(device)
         timer_db.stop()
 
+        # 2b: MLP Projector (Qwen Merger) -> 1280을 1536으로 투영
         timer_mlp.start()
-        if image_embeds.shape[-1] == 1280:
-            image_embeds = model.model.visual.merger(image_embeds)
+        
+        llm_hidden_size = model.get_input_embeddings().weight.shape[1]
+        
+        if image_embeds.shape[-1] != llm_hidden_size: # 1280 != 1536 일 경우
+            vision_encoder = model.visual if hasattr(model, 'visual') else model.model.visual
+            merger = getattr(vision_encoder, 'merger', None)
+            if merger is None and hasattr(model, 'model') and hasattr(model.model, 'visual'):
+                merger = getattr(model.model.visual, 'merger', None)
+            
+            if merger is not None:
+                image_embeds = merger(image_embeds)
         timer_mlp.stop()
+
         N_patches = image_embeds.shape[0]
 
         timer_text.start()
@@ -155,5 +166,6 @@ if processed_count > 0:
     for bar in bars2: ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{bar.get_height():.4f}', ha='center', va='bottom')
     writer.add_figure('BarCharts/LLM_Metrics', fig2, global_step=0)
 
-    print(f"\n✅ Qwen Cached 테스트 완료 (총 {processed_count}장 측정)")
+    print(f"\nQwen Cached 테스트 완료 (총 {processed_count}장 측정)")
+    print(f"평균 TTFT(Prefill): {avg['ttft']:.4f}초 | 평균 Decode: {avg['decode']:.4f}초 | 평균 Total Latency: {avg['latency']:.4f}초")
 writer.close()
