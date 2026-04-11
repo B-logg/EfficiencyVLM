@@ -1,7 +1,7 @@
 import os
 import torch
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg') # GUI 없이 그래프 생성
 import matplotlib.pyplot as plt
 from datasets import load_dataset
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, LogitsProcessor, LogitsProcessorList
@@ -16,7 +16,6 @@ WARMUP_SAMPLES = 10
 writer = SummaryWriter(log_dir=LOG_DIR)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# 연산 방해 없는 순수 GPU 이벤트 타이머
 class CUDATimer:
     def __init__(self):
         self.start_event = torch.cuda.Event(enable_timing=True)
@@ -28,7 +27,6 @@ class CUDATimer:
     def get_time(self):
         return self.start_event.elapsed_time(self.end_event) / 1000.0
 
-# TTFT(첫 토큰 생성 시간) 캡처용 프로세서
 class TTFTLogitsProcessor(LogitsProcessor):
     def __init__(self):
         self.first_token_event = torch.cuda.Event(enable_timing=True)
@@ -39,7 +37,7 @@ class TTFTLogitsProcessor(LogitsProcessor):
             self.is_first = False
         return scores
 
-print("Loading Qwen Model & Processor...")
+print("Loading Qwen Model & Processor")
 model = Qwen2VLForConditionalGeneration.from_pretrained(
     MODEL_ID, torch_dtype=torch.bfloat16, device_map=device
 ).eval()
@@ -63,6 +61,7 @@ with torch.no_grad():
         timer_text = CUDATimer()
         timer_img = CUDATimer()
         timer_vit = CUDATimer()
+        timer_mlp = CUDATimer()
         timer_fusion = CUDATimer()
         timer_gen = CUDATimer()
         
@@ -73,19 +72,31 @@ with torch.no_grad():
         grid_thw = image_inputs.image_grid_thw
         timer_img.stop()
 
-        # 2a: ViT & Merger
+        # 2a: ViT
         timer_vit.start()
         vision_encoder = model.visual if hasattr(model, 'visual') else model.model.visual
         vision_outputs = vision_encoder(pixel_values, grid_thw=grid_thw)
         
+        # 박스에서 텐서 추출
         if hasattr(vision_outputs, 'last_hidden_state'):
             image_embeds = vision_outputs.last_hidden_state
         elif isinstance(vision_outputs, tuple):
             image_embeds = vision_outputs[0]
         else:
             image_embeds = vision_outputs
-
         timer_vit.stop()
+
+        # 2b: MLP Projector: 1280 => 1536으로 투영
+        timer_mlp.start()
+        if image_embeds.shape[-1] != model.config.hidden_size: # 1280 차원일 경우
+            merger = getattr(vision_encoder, 'merger', None)
+            if merger is None and hasattr(model.model, 'visual'):
+                merger = getattr(model.model.visual, 'merger', None)
+            
+            if merger is not None:
+                image_embeds = merger(image_embeds)
+        timer_mlp.stop()
+        
         N_patches = image_embeds.shape[0]
 
         # 1a: Text Proc
@@ -116,17 +127,15 @@ with torch.no_grad():
         )
         timer_gen.stop()
         
-        # 단 한 번의 동기화로 모든 시간 정산 (연산 병목 X)
         torch.cuda.synchronize()
         
-        # 웜업 스킵
         if idx < WARMUP_SAMPLES:
             continue
             
         time_text = timer_text.get_time()
         time_img = timer_img.get_time()
         time_vit = timer_vit.get_time()
-        time_mlp = 0.0 # Qwen E2E는 통합됨
+        time_mlp = timer_mlp.get_time()
         time_fusion = timer_fusion.get_time()
         time_gen = timer_gen.get_time()
         
@@ -142,7 +151,8 @@ with torch.no_grad():
         # 텐서보드 기록
         writer.add_scalar('Pipeline/1a_Text', time_text, idx)
         writer.add_scalar('Pipeline/1b_Image', time_img, idx)
-        writer.add_scalar('Pipeline/2a_ViT_Merged', time_vit, idx)
+        writer.add_scalar('Pipeline/2a_ViT', time_vit, idx)
+        writer.add_scalar('Pipeline/2b_MLP(Merger)', time_mlp, idx)
         writer.add_scalar('Pipeline/3_Fusion', time_fusion, idx)
         writer.add_scalar('LLM_Metrics/TTFT(Prefill)', ttft, idx)
         writer.add_scalar('LLM_Metrics/Decode_Time', decode_time, idx)
@@ -151,30 +161,23 @@ with torch.no_grad():
         writer.add_scalar('LLM_Metrics/Throughput', throughput, idx)
         writer.add_scalar('System/VRAM_MB', vram_peak, idx)
 
-        sum_times['text'] += time_text
-        sum_times['img'] += time_img
-        sum_times['vit'] += time_vit
-        sum_times['fusion'] += time_fusion
-        sum_times['gen'] += time_gen
-        sum_times['ttft'] += ttft
-        sum_times['decode'] += decode_time
-        sum_times['latency'] += total_latency
+        sum_times['text'] += time_text; sum_times['img'] += time_img
+        sum_times['vit'] += time_vit; sum_times['mlp'] += time_mlp
+        sum_times['fusion'] += time_fusion; sum_times['gen'] += time_gen
+        sum_times['ttft'] += ttft; sum_times['decode'] += decode_time; sum_times['latency'] += total_latency
         processed_count += 1
 
-# 결과 막대그래프 생성 및 텐서보드 업로드
 if processed_count > 0:
     avg = {k: v / processed_count for k, v in sum_times.items()}
     
-    # 1. 파이프라인 그래프
     fig1, ax1 = plt.subplots(figsize=(10, 6))
-    bars1 = ax1.bar(['1a.Text', '1b.Image', '2a.ViT(+Merger)', '2b.MLP', '3.Fusion', '4.Gen'], 
-                    [avg['text'], avg['img'], avg['vit'], 0.0, avg['fusion'], avg['gen']], color='skyblue')
+    bars1 = ax1.bar(['1a.Text', '1b.Image', '2a.ViT', '2b.MLP(Merger)', '3.Fusion', '4.Gen'], 
+                    [avg['text'], avg['img'], avg['vit'], avg['mlp'], avg['fusion'], avg['gen']], color='skyblue')
     ax1.set_title('Qwen E2E Pipeline Average Time')
     ax1.set_ylabel('Seconds')
     for bar in bars1: ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{bar.get_height():.4f}', ha='center', va='bottom')
     writer.add_figure('BarCharts/Pipeline_Times', fig1, global_step=0)
 
-    # 2. LLM 지표 그래프
     fig2, ax2 = plt.subplots(figsize=(10, 6))
     bars2 = ax2.bar(['TTFT (Prefill)', 'Decode Time', 'Total Latency'], 
                     [avg['ttft'], avg['decode'], avg['latency']], color='coral')
