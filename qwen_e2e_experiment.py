@@ -73,9 +73,18 @@ with torch.no_grad():
         grid_thw = image_inputs.image_grid_thw
         timer_img.stop()
 
-        # 2a: ViT & Merger (Qwen은 하나로 통합됨)
+        # 2a: ViT & Merger
         timer_vit.start()
-        image_embeds = model.model.visual(pixel_values, grid_thw=grid_thw)
+        vision_encoder = model.visual if hasattr(model, 'visual') else model.model.visual
+        vision_outputs = vision_encoder(pixel_values, grid_thw=grid_thw)
+        
+        if hasattr(vision_outputs, 'last_hidden_state'):
+            image_embeds = vision_outputs.last_hidden_state
+        elif isinstance(vision_outputs, tuple):
+            image_embeds = vision_outputs[0]
+        else:
+            image_embeds = vision_outputs
+
         timer_vit.stop()
         N_patches = image_embeds.shape[0]
 
