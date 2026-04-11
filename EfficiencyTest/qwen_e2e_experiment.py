@@ -88,9 +88,12 @@ with torch.no_grad():
 
         # 2b: MLP Projector: 1280 => 1536으로 투영
         timer_mlp.start()
-        if image_embeds.shape[-1] != model.config.hidden_size: # 1280 차원일 경우
+
+        llm_hidden_size = model.get_input_embeddings().weight.shape[1]
+
+        if image_embeds.shape[-1] != llm_hidden_size: # 1280 != 1536 일 경우
             merger = getattr(vision_encoder, 'merger', None)
-            if merger is None and hasattr(model.model, 'visual'):
+            if merger is None and hasattr(model, 'model') and hasattr(model.model, 'visual'):
                 merger = getattr(model.model.visual, 'merger', None)
             
             if merger is not None:
