@@ -120,6 +120,7 @@ with torch.no_grad():
         writer.add_scalar('Pipeline/3_Fusion', time_fusion, idx)
         writer.add_scalar('LLM_Metrics/TTFT(Prefill)', ttft, idx); writer.add_scalar('LLM_Metrics/Decode_Time', decode_time, idx)
         writer.add_scalar('LLM_Metrics/TPOT', tpot, idx); writer.add_scalar('LLM_Metrics/Total_Latency', total_latency, idx)
+        writer.add_scalar('LLM_Metrics/Throughput', throughput, idx) 
         writer.add_scalar('System/VRAM_MB', vram_peak, idx)
 
         sum_times['text'] += time_text; sum_times['img'] += time_img; sum_times['vit'] += time_vit
