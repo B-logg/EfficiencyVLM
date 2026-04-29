@@ -38,14 +38,13 @@ model = LlavaForConditionalGeneration.from_pretrained(
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
 
-# LLaVA 1.5는 고정 해상도(주로 336x336)를 사용하지만, 시퀀스 길이 시뮬레이션을 위해 이미지 크기를 강제로 늘려봅니다.
-# 주의: LLaVA의 경우 AnyRes가 아니면 ViT에서 강제로 resize 할 수 있으므로 전처리 시간이 일정할 수 있습니다.
+# [수정] 해상도가 아닌 '타일(Tile)' 개수를 늘려서 시퀀스 길이 증가 (LLaVA-HD 방식)
 seq_configs = [
-    {"label": "256", "size": (336, 336)},
-    {"label": "1k",  "size": (672, 672)},
-    {"label": "2k",  "size": (1008, 1008)},
-    {"label": "4k",  "size": (1344, 1344)},
-    {"label": "8k",  "size": (1680, 1680)}
+    {"label": "256", "tiles": 1},  # 1 * 576 = 576 patches
+    {"label": "1k",  "tiles": 2},  # 2 * 576 = 1152 patches
+    {"label": "2k",  "tiles": 4},  # 4 * 576 = 2304 patches
+    {"label": "4k",  "tiles": 7},  # 7 * 576 = 4032 patches
+    {"label": "8k",  "tiles": 14}  # 14 * 576 = 8064 patches
 ]
 
 results = {"labels": [], "preproc": [], "encode": [], "prefill": []}
@@ -54,7 +53,7 @@ print("Starting LLaVA E2E TTFT Breakdown Measurement...")
 with torch.no_grad():
     for config in tqdm(seq_configs, desc="Sequence Lengths"):
         label = config["label"]
-        w, h = config["size"]
+        tiles = config["tiles"]
         sum_preproc = 0.0; sum_encode = 0.0; sum_prefill = 0.0
         
         for i in range(WARMUP_SAMPLES + TEST_SAMPLES):
@@ -62,24 +61,29 @@ with torch.no_grad():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
 
-            dummy_image = Image.fromarray(np.random.randint(0, 255, (h, w, 3), dtype=np.uint8))
+            # 336x336 크기의 이미지를 tiles 개수만큼 리스트로 생성
+            dummy_images = [Image.fromarray(np.random.randint(0, 255, (336, 336, 3), dtype=np.uint8)) for _ in range(tiles)]
             text_prompt = "USER: <image>\nDescribe this image in detail.\nASSISTANT:"
             
             timer_preproc = CUDATimer(); timer_encode = CUDATimer(); timer_prefill = CUDATimer()
 
-            # 1. Image Preprocessing
+            # 1. Image Preprocessing (타일 N개 전처리)
             timer_preproc.start()
-            img_inputs = processor.image_processor(images=dummy_image, return_tensors="pt")
-            pixel_values = img_inputs.pixel_values.to(device, dtype=torch.bfloat16)
+            img_inputs = processor.image_processor(images=dummy_images, return_tensors="pt")
+            pixel_values = img_inputs.pixel_values.to(device, dtype=torch.bfloat16) # (tiles, 3, 336, 336)
             timer_preproc.stop()
 
             # 2. Image Encoding (ViT + MLP)
             timer_encode.start()
             v_tower = model.vision_tower if hasattr(model, 'vision_tower') else model.model.vision_tower
             vision_outputs = v_tower(pixel_values, output_hidden_states=True)
-            selected_features = vision_outputs.hidden_states[-2][:, 1:]
+            selected_features = vision_outputs.hidden_states[-2][:, 1:] # (tiles, 576, 1024)
+            
+            # 여러 타일의 패치들을 하나의 긴 시퀀스로 Flatten: (1, tiles * 576, 1024)
+            selected_features = selected_features.reshape(1, -1, selected_features.shape[-1])
+            
             v_proj = model.multi_modal_projector if hasattr(model, 'multi_modal_projector') else model.model.multi_modal_projector
-            image_embeds = v_proj(selected_features) 
+            image_embeds = v_proj(selected_features) # (1, tiles * 576, 4096)
             timer_encode.stop()
 
             # 3. LLM Prefill (Fusion + Generate)

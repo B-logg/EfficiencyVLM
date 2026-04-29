@@ -37,12 +37,13 @@ model = LlavaForConditionalGeneration.from_pretrained(
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
 
+# [수정] E2E와 완벽하게 동일한 패치 수를 생성하도록 타일 개수 동기화
 seq_configs = [
-    {"label": "256", "patches": 576}, # LLaVA 1.5 기본 패치 수 (24x24)
-    {"label": "1k",  "patches": 1024},
-    {"label": "2k",  "patches": 2048},
-    {"label": "4k",  "patches": 4096},
-    {"label": "8k",  "patches": 8192}
+    {"label": "256", "tiles": 1},  # 576 patches
+    {"label": "1k",  "tiles": 2},  # 1152 patches
+    {"label": "2k",  "tiles": 4},  # 2304 patches
+    {"label": "4k",  "tiles": 7},  # 4032 patches
+    {"label": "8k",  "tiles": 14}  # 8064 patches
 ]
 
 results = {"labels": [], "preproc": [], "encode": [], "prefill": []}
@@ -51,7 +52,7 @@ print("Starting LLaVA Cached TTFT Breakdown Measurement...")
 with torch.no_grad():
     for config in tqdm(seq_configs, desc="Sequence Lengths"):
         label = config["label"]
-        n_patches = config["patches"]
+        n_patches = config["tiles"] * 576
         sum_preproc = 0.0; sum_encode = 0.0; sum_prefill = 0.0
         
         for i in range(WARMUP_SAMPLES + TEST_SAMPLES):
@@ -67,7 +68,7 @@ with torch.no_grad():
 
             # Encode Mode: DB Load + Projector
             timer_encode.start()
-            # DB Load 시뮬레이션
+            # E2E와 동일한 패치 개수를 로드
             loaded_features = torch.randn((1, n_patches, 1024), dtype=torch.bfloat16, device=device)
             v_proj = model.multi_modal_projector if hasattr(model, 'multi_modal_projector') else model.model.multi_modal_projector
             image_embeds = v_proj(loaded_features) 
@@ -91,7 +92,7 @@ with torch.no_grad():
             torch.cuda.synchronize()
 
             if i >= WARMUP_SAMPLES:
-                sum_preproc += timer_preproc.get_time()
+                sum_preproc += timer_preproc.get_time() # 0
                 sum_encode += timer_encode.get_time()
                 sum_prefill += timer_prefill.start_event.elapsed_time(ttft_processor.first_token_event)
 
