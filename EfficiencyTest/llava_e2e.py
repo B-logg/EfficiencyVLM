@@ -31,7 +31,8 @@ class TTFTLogitsProcessor(LogitsProcessor):
 print("Loading LLaVA E2E Model...")
 model = LlavaNextForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, device_map=device).eval()
 processor = LlavaNextProcessor.from_pretrained(MODEL_ID)
-dataset = load_dataset("detection-datasets/coco", split=f"val[:{NUM_TEST_SAMPLES}]", trust_remote_code=True)
+# 경고 메시지를 없애기 위해 trust_remote_code는 제거했습니다.
+dataset = load_dataset("detection-datasets/coco", split=f"val[:{NUM_TEST_SAMPLES}]")
 image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
 
 results = []
@@ -52,7 +53,8 @@ with torch.no_grad():
         
         # 1b. Image
         timer_img.start()
-        img_in = processor(images=image, return_tensors="pt").to(device, torch.bfloat16)
+        # [에러 해결] text="<image>" 를 추가하여 Processor 내부 버그(NoneType 에러)를 방지합니다.
+        img_in = processor(text="<image>", images=image, return_tensors="pt").to(device, torch.bfloat16)
         pixel_values = img_in.pixel_values
         if pixel_values.dim() == 5:
             b, num_patches, c, h, w = pixel_values.shape
