@@ -1,11 +1,10 @@
 import torch
 import pandas as pd
-import time
 from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, LogitsProcessor, LogitsProcessorList
 from tqdm import tqdm
 
-MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
+MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct" # 2B로 복구
 NUM_SAMPLES = 1010
 WARMUP = 10
 
@@ -28,26 +27,27 @@ with torch.no_grad():
         torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats(); torch.cuda.synchronize()
         img = Image.new('RGB', (1344, 1344), color='white')
         
-        # 1a. Text Pre
+        # 1a. Text
         t1a_s = torch.cuda.Event(enable_timing=True); t1a_e = torch.cuda.Event(enable_timing=True)
         t1a_s.record()
         txt_in = processor.tokenizer("<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>Describe.<|im_end|>\n<|im_start|>assistant\n", return_tensors="pt").to("cuda")
         t1a_e.record()
         
-        # 1b. Image Pre
+        # 1b. Image
         t1b_s = torch.cuda.Event(enable_timing=True); t1b_e = torch.cuda.Event(enable_timing=True)
         t1b_s.record()
         img_in = processor.image_processor(images=[img], return_tensors="pt").to("cuda")
+        grid_thw = img_in.image_grid_thw # 추론용 변수 추출
         t1b_e.record()
 
-        # 2a. ViT (Backbone)
+        # 2a. ViT
         t2a_s = torch.cuda.Event(enable_timing=True); t2a_e = torch.cuda.Event(enable_timing=True)
         t2a_s.record()
         v_out = model.visual.patch_embed(img_in.pixel_values.to(torch.bfloat16))
         for block in model.visual.blocks: v_out = block(v_out)
         t2a_e.record()
 
-        # 2b. MLP (Merger)
+        # 2b. MLP
         t2b_s = torch.cuda.Event(enable_timing=True); t2b_e = torch.cuda.Event(enable_timing=True)
         t2b_s.record()
         img_feats = model.visual.merger(v_out)
@@ -61,12 +61,12 @@ with torch.no_grad():
         inputs_embeds[image_mask] = img_feats
         t3_e.record()
 
-        # 4. Gen (LLM Input to First Token)
+        # 4. Gen
         torch.cuda.synchronize()
         t4_start_ev = torch.cuda.Event(enable_timing=True); t4_start_ev.record()
         handler = TTFTLogitsProcessor()
-        outputs = model.generate(inputs_embeds=inputs_embeds, max_new_tokens=20, logits_processor=LogitsProcessorList([handler]), use_cache=True)
-        torch.cuda.synchronize()
+        # 주의: Qwen은 image_grid_thw 파라미터를 반드시 넣어주어야 합니다!
+        outputs = model.generate(inputs_embeds=inputs_embeds, attention_mask=txt_in.attention_mask, image_grid_thw=grid_thw, max_new_tokens=20, logits_processor=LogitsProcessorList([handler]), use_cache=True)
         t_total_end = torch.cuda.Event(enable_timing=True); t_total_end.record(); torch.cuda.synchronize()
 
         if i >= WARMUP:
@@ -74,7 +74,7 @@ with torch.no_grad():
             r1a=t1a_s.elapsed_time(t1a_e)/ms; r1b=t1b_s.elapsed_time(t1b_e)/ms; r2a=t2a_s.elapsed_time(t2a_e)/ms
             r2b=t2b_s.elapsed_time(t2b_e)/ms; r3=t3_s.elapsed_time(t3_e)/ms; r4=t4_start_ev.elapsed_time(handler.first_token_event)/ms
             true_ttft = r1a + r1b + r2a + r2b + r3 + r4
-            total_latency = true_ttft + (handler.first_token_event.elapsed_time(t_total_end)/ms)
-            results.append([r1a, r1b, r2a, r2b, r3, r4, true_ttft, total_latency, torch.cuda.max_memory_allocated()/1024**3, outputs.shape[1]])
+            decode_time = handler.first_token_event.elapsed_time(t_total_end)/ms
+            results.append([r1a, r1b, r2a, r2b, r3, r4, true_ttft, decode_time, true_ttft + decode_time, torch.cuda.max_memory_allocated()/1024**3, outputs.shape[1]])
 
-pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_mlp','3_fusion','4_gen','true_ttft','total_latency','vram','tokens']).to_csv("qwen_e2e_results.csv", index=False)
+pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_mlp','3_fusion','4_gen','true_ttft','decode_time','total_latency','vram','tokens']).to_csv("qwen_e2e_results.csv", index=False)
