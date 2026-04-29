@@ -9,7 +9,6 @@ from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, LogitsP
 from tqdm import tqdm
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
-# DB Load 시뮬레이션을 위한 더미 임베딩 경로 폴더 (실제 텐서 크기에 맞춰야 함)
 EMBED_DIR = "./qwen_vision_embeddings" 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 WARMUP_SAMPLES = 10
@@ -39,7 +38,6 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
 ).eval()
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 
-# 해상도 설정 (DB 로드 크기를 추정하기 위함)
 seq_configs = [
     {"label": "256", "size": (448, 448)},
     {"label": "1k",  "size": (896, 896)},
@@ -56,9 +54,6 @@ with torch.no_grad():
         label = config["label"]
         w, h = config["size"]
         
-        # 임의의 실제 pt 파일 하나를 계속 로드한다고 가정 (파일 크기가 중요하므로)
-        # 만약 실제 pt 파일이 없다면, 메모리에서 직접 텐서를 생성하여 DB Load 시간을 시뮬레이션 합니다.
-        
         sum_preproc = 0.0; sum_encode = 0.0; sum_prefill = 0.0
         
         for i in range(WARMUP_SAMPLES + TEST_SAMPLES):
@@ -70,19 +65,18 @@ with torch.no_grad():
             
             timer_preproc = CUDATimer(); timer_encode = CUDATimer(); timer_prefill = CUDATimer()
 
-            # Cached: Image Preproc (0초), Image Encoding (DB Load + Merger)
-            # 여기서는 DB Load 시간을 Encode 단계에 합치거나 (또는 Preproc를 0으로 둠)
             timer_preproc.start()
-            # 캐시 모드이므로 이미지 전처리는 생략
             timer_preproc.stop()
 
             timer_encode.start()
-            # 1. DB Load 시뮬레이션 (해당 시퀀스 길이에 맞는 텐서 생성으로 대체, 실제 구현시 torch.load)
-            N_patches_approx = (h // 28) * (w // 28) # Qwen 패치 계산
-            loaded_embeds = torch.randn((N_patches_approx, 1280), dtype=torch.bfloat16, device=device)
-            grid_thw = torch.tensor([[1, h//28, w//28]], device=device)
+            # =========================================================
+            # [수정된 부분] DB Load 시뮬레이션
+            # Qwen2-VL ViT 패치 기준(14x14)으로 더미 텐서를 생성해야 Merger가 정상 작동합니다.
+            # =========================================================
+            N_vit_patches = (h // 14) * (w // 14)
+            loaded_embeds = torch.randn((N_vit_patches, 1280), dtype=torch.bfloat16, device=device)
             
-            # 2. Merger
+            # Merger 연산
             llm_hidden_size = model.get_input_embeddings().weight.shape[1]
             if loaded_embeds.shape[-1] != llm_hidden_size: 
                 vision_encoder = model.visual if hasattr(model, 'visual') else model.model.visual
@@ -110,7 +104,7 @@ with torch.no_grad():
             torch.cuda.synchronize()
 
             if i >= WARMUP_SAMPLES:
-                sum_preproc += timer_preproc.get_time() # 0에 수렴
+                sum_preproc += timer_preproc.get_time() # 0
                 sum_encode += timer_encode.get_time() # DB Load + Merger 시간
                 sum_prefill += timer_prefill.start_event.elapsed_time(ttft_processor.first_token_event)
 
