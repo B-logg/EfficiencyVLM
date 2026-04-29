@@ -6,7 +6,7 @@ from tqdm import tqdm
 from datasets import load_dataset
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
-SAVE_DIR = "./llava_embeddings"
+SAVE_DIR = "./llava_vision_embeddings"
 NUM_TEST_SAMPLES = 1010
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -24,15 +24,15 @@ with torch.no_grad():
         inputs = processor(images=image, text="<image>", return_tensors="pt").to(device, torch.bfloat16)
         pixel_values = inputs.pixel_values
         
-        # [에러 해결] LLaVA-v1.6의 pixel_values는 (1, num_patches, 3, 336, 336) 입니다.
-        # vision_tower에 넣을 때 image_sizes 정보가 필요할 수 있으므로, 모델 자체의 forward 경로를 일부 활용합니다.
-        vision_tower = model.vision_tower
-        multi_modal_projector = model.multi_modal_projector
+        # [에러 해결] LLaVA-v1.6 AnyRes의 5D 텐서를 ViT가 인식할 수 있는 4D로 풀어줍니다.
+        if pixel_values.dim() == 5:
+            b, num_patches, c, h, w = pixel_values.shape
+            pixel_values = pixel_values.view(b * num_patches, c, h, w)
+        
+        vision_tower = getattr(model, 'vision_tower', getattr(getattr(model, 'model', None), 'vision_tower', None))
+        multi_modal_projector = getattr(model, 'multi_modal_projector', getattr(getattr(model, 'model', None), 'multi_modal_projector', None))
         
         image_outputs = vision_tower(pixel_values, output_hidden_states=True)
-        # AnyRes feature selection
-        selected_image_feature = image_outputs.hidden_states[-2]
-        image_features = multi_modal_projector(selected_image_feature)
+        image_features = multi_modal_projector(image_outputs.hidden_states[-2])
         
-        # 저장
         torch.save(image_features.cpu(), f"{SAVE_DIR}/embed_{image_id}.pt")
