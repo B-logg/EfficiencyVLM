@@ -5,7 +5,7 @@ from transformers import LlavaNextForConditionalGeneration, LlavaNextProcessor
 from tqdm import tqdm
 
 # 모델 설정
-MODEL_ID = "llava-hf/llava-next-7b-hf" # AnyRes 지원 모델
+MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf" # AnyRes 지원 모델
 SAVE_DIR = "./llava_next_embeddings"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
