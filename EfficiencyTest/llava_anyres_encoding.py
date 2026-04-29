@@ -15,18 +15,14 @@ model = LlavaNextForConditionalGeneration.from_pretrained(
 
 def generate_caches():
     with torch.no_grad():
-        for i in tqdm(range(1000), desc="Generating LLaVA AnyRes Caches"):
-            # AnyRes 체감을 위해 고해상도 생성 (1344x1344)
+        for i in tqdm(range(1000), desc="Generating LLaVA Caches"):
             image = Image.new('RGB', (1344, 1344), color=(i%255, i%255, i%255))
             inputs = processor(images=image, text="<image>", return_tensors="pt").to("cuda", torch.bfloat16)
             
-            # LlavaNext 구조: model.model.vision_tower로 접근
             vision_tower = model.model.vision_tower
-            multi_modal_projector = model.multi_modal_projector
+            multi_modal_projector = model.model.multi_modal_projector
             
-            # Vision Tower 연산
             image_outputs = vision_tower(inputs.pixel_values, output_hidden_states=True)
-            # Projector 연산
             image_features = multi_modal_projector(image_outputs.last_hidden_state)
             
             torch.save(image_features.cpu(), f"{SAVE_DIR}/embed_{i}.pt")
