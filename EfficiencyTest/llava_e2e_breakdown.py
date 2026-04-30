@@ -7,7 +7,7 @@ from tqdm import tqdm
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 device = "cuda"
 
-TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192}
+TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "3k": 3072, "4k": 4000}
 NUM_ITER = 110
 
 class CUDATimer:
@@ -36,7 +36,6 @@ NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data if doc['text'].st
 
 results = []
 with torch.no_grad():
-    # LLaVA 타일 토큰 수 미리 계산
     temp_in = processor(text="<image>", images=original_image, return_tensors="pt").to(device, torch.bfloat16)
     num_patches = temp_in.pixel_values.shape[1] if temp_in.pixel_values.dim() == 5 else 1
     num_visual_tokens = num_patches * 576

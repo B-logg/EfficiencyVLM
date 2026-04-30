@@ -7,8 +7,9 @@ from tqdm import tqdm
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 device = "cuda"
 
-TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192}
-NUM_ITER = 110 # 10 Warmup + 100 Measure
+# [수정] 모델 한계에 맞춰 4k(4000)까지만 측정
+TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "3k": 3072, "4k": 4000}
+NUM_ITER = 110 
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -26,11 +27,9 @@ print("Loading Qwen E2E Model & Data...")
 model = Qwen2VLForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, device_map=device).eval()
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 
-# 1. 원본 이미지 1장 로드
 img_dataset = load_dataset("detection-datasets/coco", split="val[:1]", trust_remote_code=True)
 original_image = img_dataset[0]['image'].convert("RGB")
 
-# 2. [핵심] 위키피디아 자연어 텍스트 풀 생성 (약 5만 자 이상 넉넉하게)
 print("Generating Natural Language Text Pool from Wikitext...")
 wiki_data = load_dataset("wikitext", "wikitext-2-raw-v1", split="train[:1000]")
 NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data if doc['text'].strip()]) * 10
@@ -58,7 +57,6 @@ with torch.no_grad():
             if merger and img_embs.shape[-1] != model.get_input_embeddings().weight.shape[1]: img_embs = merger(img_embs)
             t2b.stop()
 
-            # [핵심] 자연어 패딩 슬라이싱 (1토큰 ≈ 4글자로 보수적 계산)
             num_visual_tokens = img_embs.shape[0]
             needed_text_tokens = max(10, target_seq_len - num_visual_tokens - 20)
             padded_text = NATURAL_TEXT_POOL[:needed_text_tokens * 4] 

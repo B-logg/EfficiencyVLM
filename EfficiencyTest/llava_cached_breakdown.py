@@ -7,7 +7,7 @@ from tqdm import tqdm
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 device = "cuda"
 
-TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192}
+TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "3k": 3072, "4k": 4000}
 NUM_ITER = 110
 
 class CUDATimer:

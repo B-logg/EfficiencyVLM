@@ -7,7 +7,7 @@ from tqdm import tqdm
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 device = "cuda"
 
-TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192}
+TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "3k": 3072, "4k": 4000}
 NUM_ITER = 110
 
 class CUDATimer:
@@ -35,7 +35,6 @@ NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data if doc['text'].st
 
 results = []
 with torch.no_grad():
-    # 이미지 고정이므로 캐시는 1번만 만듦
     img_in = processor.image_processor(images=original_image, return_tensors="pt").to(device)
     vision_encoder = getattr(model, 'visual', getattr(getattr(model, 'model', None), 'visual', None))
     v_out = vision_encoder(img_in.pixel_values.to(torch.bfloat16), grid_thw=img_in.image_grid_thw)
