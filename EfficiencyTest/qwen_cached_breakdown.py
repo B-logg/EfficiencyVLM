@@ -31,12 +31,18 @@ with torch.no_grad():
     for label, size in SEQ_SIZES.items():
         print(f"Testing Qwen Cached - Sequence Length: {label}")
         
-        # 1. 테스트용 임베딩 캐시 먼저 생성 (메모리상주 방지 위해 저장)
+        # 1. 테스트용 임베딩 캐시 먼저 생성 (안전한 우회 코드 적용!)
         img_in = processor.image_processor(images=Image.new('RGB', size, color='white'), return_tensors="pt").to(device)
-        v_out = model.visual(img_in.pixel_values.to(torch.bfloat16), grid_thw=img_in.image_grid_thw)
+        
+        # [수정] model.visual 에러 해결
+        vision_encoder = getattr(model, 'visual', getattr(getattr(model, 'model', None), 'visual', None))
+        v_out = vision_encoder(img_in.pixel_values.to(torch.bfloat16), grid_thw=img_in.image_grid_thw)
+        
         img_embs = v_out.last_hidden_state if hasattr(v_out, 'last_hidden_state') else (v_out[0] if isinstance(v_out, tuple) else v_out)
-        merger = getattr(model.visual, 'merger', None)
-        if merger and img_embs.shape[-1] != model.get_input_embeddings().weight.shape[1]: img_embs = merger(img_embs)
+        merger = getattr(vision_encoder, 'merger', None)
+        if merger and img_embs.shape[-1] != model.get_input_embeddings().weight.shape[1]: 
+            img_embs = merger(img_embs)
+            
         torch.save({"embeds": img_embs.cpu(), "grid_thw": img_in.image_grid_thw.cpu()}, f"temp_qwen_{label}.pt")
         
         avg_preproc = 0.0; avg_encode = 0.0; avg_prefill = 0.0
@@ -44,7 +50,7 @@ with torch.no_grad():
         
         for i in tqdm(range(NUM_ITER)):
             torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats(); torch.cuda.synchronize()
-            t_db=CUDATimer(); t_text=CUDATimer(); t_mlp=CUDATimer(); t_fusion=CUDATimer(); t_gen=CUDATimer()
+            t_db=CUDATimer(); t_text=CUDATimer(); t_fusion=CUDATimer(); t_gen=CUDATimer()
             
             t_db.start(); saved = torch.load(f"temp_qwen_{label}.pt"); embs = saved["embeds"].to(device, torch.bfloat16); g_thw = saved["grid_thw"].to(device); t_db.stop()
             
@@ -57,7 +63,8 @@ with torch.no_grad():
 
             if i >= 10:
                 avg_preproc += (t_text.time()) * 1000
-                avg_encode += (t_db.time() + t_mlp.time() + t_fusion.time()) * 1000 # Cached에서는 DB 로드가 Encoding 역할
+                # [수정] Cached에서는 MLP를 생략하므로 깔끔하게 DB Load + Fusion만 합산
+                avg_encode += (t_db.time() + t_fusion.time()) * 1000 
                 avg_prefill += (t_gen.s.elapsed_time(hnd.evt))
                 measure_count += 1
                 
