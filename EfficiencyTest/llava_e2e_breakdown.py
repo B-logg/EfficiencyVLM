@@ -72,8 +72,29 @@ with torch.no_grad():
             if img_embs.dim() == 3 and img_embs.shape[0] != 1: img_embs = img_embs.view(1, -1, img_embs.shape[-1])
             t2b.stop()
             
-            t3.start(); in_embs = model.get_input_embeddings()(txt_in.input_ids); idx_img = torch.where(txt_in.input_ids == image_token_id)[1][0]
+            # t3: 인코딩된 이미지 임베딩과 텍스트 임베딩을 하나로 합치는 과정 (Fusion)
+            t3.start()
+            in_embs = model.get_input_embeddings()(txt_in.input_ids)
+            idx_img = torch.where(txt_in.input_ids == image_token_id)[1][0]
+            
+            # --- [강제 Truncation 로직 추가] ---
+            # LLM(Vicuna)의 최대 컨텍스트 길이는 4096입니다.
+            max_total_len = 4096 
+            # 현재 텍스트 토큰 개수 (이미지 토큰 제외)
+            text_len = in_embs.shape[1] - 1 
+            # 이미지 임베딩에 할당 가능한 최대 길이 (안전을 위해 100토큰 더 여유를 둠)
+            allowed_img_len = max_total_len - text_len - 100 
+            
+            # 만약 이미지 토큰이 허용치를 넘으면, 8K 연산 결과의 앞부분만 남기고 자릅니다.
+            if img_embs.shape[1] > allowed_img_len:
+                # 비전 인코더는 이미 타일 37개를 다 돌렸지만, LLM 주입 직전에만 자르는 것입니다.
+                img_embs = img_embs[:, :allowed_img_len, :]
+            # --- [Truncation 끝] ---
+
+            # 최종적으로 잘린 임베딩으로 합치기
             f_embs = torch.cat([in_embs[:, :idx_img, :], img_embs, in_embs[:, idx_img+1:, :]], dim=1)
+            
+            # 어텐션 마스크도 바뀐 이미지 길이에 맞춰서 생성
             m_img = torch.ones((1, img_embs.shape[1]), dtype=txt_in.attention_mask.dtype, device=device)
             f_mask = torch.cat([txt_in.attention_mask[:, :idx_img], m_img, txt_in.attention_mask[:, idx_img+1:]], dim=1)
             t3.stop()
