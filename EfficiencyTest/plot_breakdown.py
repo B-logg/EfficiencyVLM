@@ -1,58 +1,79 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import os
-import matplotlib
+import numpy as np
 
-matplotlib.use('Agg') # 서버 환경 오류 방지
+# CSV 파일 로드
+files = {
+    "Qwen (E2E)": "qwen_e2e.csv",
+    "Qwen (Cached)": "qwen_cached.csv",
+    "LLaVA (E2E)": "llava_e2e.csv",
+    "LLaVA (Cached)": "llava_cached.csv"
+}
 
-def plot_breakdown(csv_file, title):
-    if not os.path.exists(csv_file):
-        print(f"File {csv_file} not found. Skipping plot.")
-        return
+dataframes = {}
+for name, file in files.items():
+    try:
+        dataframes[name] = pd.read_csv(file)
+        print(f"Loaded {file}")
+    except FileNotFoundError:
+        print(f"Warning: {file} not found. Skipping.")
+
+if not dataframes:
+    print("No CSV files found to plot.")
+    exit()
+
+# X축 레이블을 CSV에서 바로 가져옴
+resolutions = list(dataframes.values())[0]['Resolution'].tolist()
+
+fig, axes = plt.subplots(2, 2, figsize=(16, 12), sharey=True)
+axes = axes.flatten()
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c'] 
+
+for idx, (model_name, df) in enumerate(dataframes.items()):
+    ax = axes[idx]
+    
+    # 에러 방지 (길이 맞추기)
+    if len(df) < len(resolutions):
+        missing = len(resolutions) - len(df)
+        df_dummy = pd.DataFrame([{"Resolution": resolutions[len(df)+i], "Image Preprocessing": 0, "Image Encoding (DB Load)" if "Cached" in model_name else "Image Encoding": 0, "LLM Prefill": 0} for i in range(missing)])
+        df = pd.concat([df, df_dummy], ignore_index=True)
+
+    if "Cached" in model_name:
+        bottom = np.zeros(len(df))
+        ax.bar(df['Resolution'], df['Image Preprocessing'], label='Image Preprocessing', color=colors[0])
+        bottom += df['Image Preprocessing'].fillna(0)
         
-    df = pd.read_csv(csv_file)
-    labels = df['Seq_Length']
-    
-    preproc = df['Image Preprocessing']
-    encode_col = 'Image Encoding (DB Load)' if 'Cached' in title else 'Image Encoding'
-    encode = df[encode_col]
-    prefill = df['LLM Prefill']
+        # 컬럼 이름이 혹시 다를까봐 안전하게 가져오기
+        col_encode = 'Image Encoding (DB Load)' if 'Image Encoding (DB Load)' in df.columns else 'Image Encoding'
+        ax.bar(df['Resolution'], df[col_encode], bottom=bottom, label='DB Load + Fusion', color=colors[1])
+        bottom += df[col_encode].fillna(0)
+        
+        ax.bar(df['Resolution'], df['LLM Prefill'], bottom=bottom, label='LLM Prefill', color=colors[2])
+    else:
+        bottom = np.zeros(len(df))
+        ax.bar(df['Resolution'], df['Image Preprocessing'], label='Image Preprocessing', color=colors[0])
+        bottom += df['Image Preprocessing'].fillna(0)
+        ax.bar(df['Resolution'], df['Image Encoding'], bottom=bottom, label='Vision Encoding + Fusion', color=colors[1])
+        bottom += df['Image Encoding'].fillna(0)
+        ax.bar(df['Resolution'], df['LLM Prefill'], bottom=bottom, label='LLM Prefill', color=colors[2])
 
-    # 사진과 완벽하게 동일한 색상 및 빗금 설정
-    colors = ['#6ebd6e', '#e07a7a', '#4f8bc6'] 
-    edgecolors = ['#4ca04c', '#555555', '#555555']
-    hatches = ['', '///', '\\\\\\']
+    ax.set_title(f"{model_name} TTFT Breakdown by Resolution", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Image Resolution (Native Input)", fontsize=12)
+    ax.set_ylabel("Latency (ms)", fontsize=12)
+    ax.tick_params(axis='x', rotation=45)
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
     
-    fig, ax = plt.subplots(figsize=(8, 7), dpi=300)
-    width = 0.55
+    # 0으로 기록된 Crash 구간 표시
+    for i, val in enumerate(bottom + df['LLM Prefill'].fillna(0)):
+        if val == 0:
+            ax.text(i, 50, "CRASH\n(Context Limit)", ha='center', va='bottom', color='red', fontweight='bold')
+        else:
+            ax.text(i, val + max(bottom.max(), 1)*0.02, f"{val:.1f}ms", ha='center', va='bottom', fontsize=10)
 
-    # 스택 바 차트 그리기
-    p1 = ax.bar(labels, preproc, width, label='Image Preprocessing', color=colors[0], edgecolor=edgecolors[0], linewidth=1.2)
-    p2 = ax.bar(labels, encode, width, bottom=preproc, label=encode_col, color=colors[1], edgecolor=edgecolors[1], hatch=hatches[1], linewidth=1.2)
-    p3 = ax.bar(labels, prefill, width, bottom=preproc + encode, label='LLM Prefill', color=colors[2], edgecolor=edgecolors[2], hatch=hatches[2], linewidth=1.2)
+# 범례 추가
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(handles, labels, loc='upper center', ncol=3, fontsize=12, bbox_to_anchor=(0.5, 1.05))
 
-    # 그래프 텍스트 및 레이아웃 (선생님 사진 스타일 완벽 복사)
-    ax.set_ylabel('Time (ms)', fontsize=20, fontweight='bold')
-    ax.set_xlabel('Sequence Length', fontsize=20, fontweight='bold')
-    ax.set_title(title, fontsize=22, fontweight='bold', pad=15)
-    
-    ax.tick_params(axis='both', which='major', labelsize=16)
-    
-    # y축 가로 점선 그리드 (연한 빨간색 점선)
-    ax.yaxis.grid(True, linestyle='--', color='lightcoral', alpha=0.6, linewidth=1.2)
-    ax.set_axisbelow(True) # 그리드를 바 뒤로 보내기
-
-    # 범례 설정
-    ax.legend(loc='upper left', fontsize=16, framealpha=1.0)
-    
-    plt.tight_layout()
-    
-    save_name = title.replace(" ", "_").replace("(", "").replace(")", "") + ".png"
-    plt.savefig(save_name, bbox_inches='tight')
-    print(f"Saved plot: {save_name}")
-
-if __name__ == "__main__":
-    plot_breakdown("qwen_seq_e2e.csv", "TTFT Breakdown (Qwen E2E)")
-    plot_breakdown("qwen_seq_cached.csv", "TTFT Breakdown (Qwen Cached)")
-    plot_breakdown("llava_seq_e2e.csv", "TTFT Breakdown (LLaVA E2E)")
-    plot_breakdown("llava_seq_cached.csv", "TTFT Breakdown (LLaVA Cached)")
+plt.tight_layout()
+plt.savefig("resolution_breakdown_plot.png", dpi=300, bbox_inches='tight')
+print("Plot saved as resolution_breakdown_plot.png")

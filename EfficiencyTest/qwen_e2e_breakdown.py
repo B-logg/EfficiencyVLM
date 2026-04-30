@@ -1,15 +1,14 @@
 import os, torch, time
 import pandas as pd
+from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, LogitsProcessor, LogitsProcessorList
-from datasets import load_dataset
 from tqdm import tqdm
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 device = "cuda"
 
-# [수정] 모델 한계에 맞춰 4k(4000)까지만 측정
-TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "3k": 3072, "4k": 4000}
-NUM_ITER = 110 
+RESOLUTIONS = {"448x448": (448, 448), "896x896": (896, 896), "1344x1344": (1344, 1344), "1792x1792": (1792, 1792), "2520x2520": (2520, 2520)}
+NUM_ITER = 110
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -23,21 +22,15 @@ class TTFTLogitsProcessor(LogitsProcessor):
         if self.is_first: self.evt.record(); self.is_first = False
         return scores
 
-print("Loading Qwen E2E Model & Data...")
+print("Loading Qwen E2E Model...")
 model = Qwen2VLForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, device_map=device).eval()
 processor = AutoProcessor.from_pretrained(MODEL_ID)
 
-img_dataset = load_dataset("detection-datasets/coco", split="val[:1]", trust_remote_code=True)
-original_image = img_dataset[0]['image'].convert("RGB")
-
-print("Generating Natural Language Text Pool from Wikitext...")
-wiki_data = load_dataset("wikitext", "wikitext-2-raw-v1", split="train[:1000]")
-NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data if doc['text'].strip()]) * 10
-
 results = []
 with torch.no_grad():
-    for label, target_seq_len in TARGET_SEQS.items():
-        print(f"Testing Qwen E2E - Target Seq: {label} | 100 Measure")
+    for label, size in RESOLUTIONS.items():
+        print(f"Testing Qwen E2E - Resolution: {label} | 100 Measure")
+        dummy_image = Image.new('RGB', size, color='white')
         
         avg_preproc = 0.0; avg_encode = 0.0; avg_prefill = 0.0; measure_count = 0
         
@@ -46,7 +39,7 @@ with torch.no_grad():
             t1a=CUDATimer(); t1b=CUDATimer(); t2a=CUDATimer(); t2b=CUDATimer(); t3=CUDATimer(); t4=CUDATimer()
             
             t1b.start()
-            img_in = processor.image_processor(images=original_image, return_tensors="pt").to(device)
+            img_in = processor.image_processor(images=dummy_image, return_tensors="pt").to(device)
             p_val = img_in.pixel_values.to(torch.bfloat16); g_thw = img_in.image_grid_thw
             t1b.stop()
             
@@ -57,12 +50,8 @@ with torch.no_grad():
             if merger and img_embs.shape[-1] != model.get_input_embeddings().weight.shape[1]: img_embs = merger(img_embs)
             t2b.stop()
 
-            num_visual_tokens = img_embs.shape[0]
-            needed_text_tokens = max(10, target_seq_len - num_visual_tokens - 20)
-            padded_text = NATURAL_TEXT_POOL[:needed_text_tokens * 4] 
-            
             t1a.start()
-            prompt = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<|vision_start|>{'<|image_pad|>' * num_visual_tokens}<|vision_end|>\nContext: {padded_text}\nDescribe the image based on the context.<|im_end|>\n<|im_start|>assistant\n"
+            prompt = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<|vision_start|>{'<|image_pad|>' * img_embs.shape[0]}<|vision_end|>\nDescribe.<|im_end|>\n<|im_start|>assistant\n"
             txt_in = processor.tokenizer(prompt, return_tensors="pt").to(device)
             t1a.stop()
             
@@ -77,6 +66,7 @@ with torch.no_grad():
                 avg_prefill += (t4.s.elapsed_time(hnd.evt))
                 measure_count += 1
                 
-        results.append({"Seq_Length": label, "Image Preprocessing": avg_preproc / measure_count, "Image Encoding": avg_encode / measure_count, "LLM Prefill": avg_prefill / measure_count})
+        results.append({"Resolution": label, "Image Preprocessing": avg_preproc / measure_count, "Image Encoding": avg_encode / measure_count, "LLM Prefill": avg_prefill / measure_count})
 
-pd.DataFrame(results).to_csv("qwen_seq_e2e.csv", index=False)
+pd.DataFrame(results).to_csv("qwen_e2e.csv", index=False)
+print("Saved qwen_e2e.csv")
