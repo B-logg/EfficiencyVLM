@@ -31,9 +31,9 @@ img_dataset = load_dataset("detection-datasets/coco", split="val[:1]", trust_rem
 original_image = img_dataset[0]['image'].convert("RGB")
 
 # 2. [핵심] 위키피디아 자연어 텍스트 풀 생성 (약 5만 자 이상 넉넉하게)
-print("Generating Natural Language Text Pool from Wikipedia...")
-wiki_data = load_dataset("wikipedia", "20220301.en", split="train[:10]")
-NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data])
+print("Generating Natural Language Text Pool from Wikitext...")
+wiki_data = load_dataset("wikitext", "wikitext-2-raw-v1", split="train[:1000]")
+NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data if doc['text'].strip()]) * 10
 
 results = []
 with torch.no_grad():
