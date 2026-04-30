@@ -1,14 +1,13 @@
-
 import os, torch, time
 import pandas as pd
-from PIL import Image
 from transformers import LlavaNextForConditionalGeneration, LlavaNextProcessor, LogitsProcessor, LogitsProcessorList
+from datasets import load_dataset
 from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 device = "cuda"
 
-SEQ_SIZES = {"256": (448, 448), "1k": (896, 896), "2k": (1260, 1260), "4k": (1792, 1792), "8k": (2520, 2520)}
+TARGET_SEQS = {"256": 256, "1k": 1024, "2k": 2048, "4k": 4096, "8k": 8192}
 NUM_ITER = 110
 
 class CUDATimer:
@@ -23,35 +22,47 @@ class TTFTLogitsProcessor(LogitsProcessor):
         if self.is_first: self.evt.record(); self.is_first = False
         return scores
 
-print("Loading LLaVA Cached Model...")
+print("Loading LLaVA Cached Model & Data...")
 model = LlavaNextForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, device_map=device).eval()
 processor = LlavaNextProcessor.from_pretrained(MODEL_ID)
 image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
 
+img_dataset = load_dataset("detection-datasets/coco", split="val[:1]", trust_remote_code=True)
+original_image = img_dataset[0]['image'].convert("RGB")
+
+print("Generating Natural Language Text Pool from Wikipedia...")
+wiki_data = load_dataset("wikipedia", "20220301.en", split="train[:10]")
+NATURAL_TEXT_POOL = " ".join([doc['text'] for doc in wiki_data])
+
 results = []
 with torch.no_grad():
-    for label, size in SEQ_SIZES.items():
-        print(f"Testing LLaVA Cached - Sequence Length: {label}")
+    img_in = processor(text="<image>", images=original_image, return_tensors="pt").to(device, torch.bfloat16)
+    pixel_values = img_in.pixel_values
+    if pixel_values.dim() == 5:
+        b, num_p, c, h, w = pixel_values.shape
+        pixel_values = pixel_values.view(b * num_p, c, h, w)
+    v_out = getattr(model, 'vision_tower', getattr(model.model, 'vision_tower', None))(pixel_values, output_hidden_states=True)
+    img_embs = getattr(model, 'multi_modal_projector', getattr(model.model, 'multi_modal_projector', None))(v_out.hidden_states[-2])
+    torch.save(img_embs.cpu(), "temp_llava_fixed.pt")
+    
+    num_patches = img_in.pixel_values.shape[1] if img_in.pixel_values.dim() == 5 else 1
+    num_visual_tokens = num_patches * 576
+
+    for label, target_seq_len in TARGET_SEQS.items():
+        print(f"Testing LLaVA Cached - Target Seq: {label} | 100 Measure")
         
-        img_in = processor(text="<image>", images=Image.new('RGB', size, color='white'), return_tensors="pt").to(device, torch.bfloat16)
-        pixel_values = img_in.pixel_values
-        if pixel_values.dim() == 5:
-            b, num_patches, c, h, w = pixel_values.shape
-            pixel_values = pixel_values.view(b * num_patches, c, h, w)
-        v_out = getattr(model, 'vision_tower', getattr(model.model, 'vision_tower', None))(pixel_values, output_hidden_states=True)
-        img_embs = getattr(model, 'multi_modal_projector', getattr(model.model, 'multi_modal_projector', None))(v_out.hidden_states[-2])
-        torch.save(img_embs.cpu(), f"temp_llava_{label}.pt")
+        needed_text_tokens = max(10, target_seq_len - num_visual_tokens - 15)
+        padded_text = NATURAL_TEXT_POOL[:needed_text_tokens * 4]
         
-        avg_preproc = 0.0; avg_encode = 0.0; avg_prefill = 0.0
-        measure_count = 0
+        avg_preproc = 0.0; avg_encode = 0.0; avg_prefill = 0.0; measure_count = 0
         
         for i in tqdm(range(NUM_ITER)):
             torch.cuda.empty_cache(); torch.cuda.reset_peak_memory_stats(); torch.cuda.synchronize()
             t1a=CUDATimer(); t_db=CUDATimer(); t3=CUDATimer(); t4=CUDATimer()
             
-            t1a.start(); txt_in = processor.tokenizer("USER: <image>\nDescribe.\nASSISTANT:", return_tensors="pt").to(device); t1a.stop()
+            t1a.start(); txt_in = processor.tokenizer(f"USER: <image>\nContext: {padded_text}\nDescribe the image based on the context.\nASSISTANT:", return_tensors="pt").to(device); t1a.stop()
             
-            t_db.start(); img_embs = torch.load(f"temp_llava_{label}.pt").to(device, torch.bfloat16)
+            t_db.start(); img_embs = torch.load("temp_llava_fixed.pt").to(device, torch.bfloat16)
             if img_embs.dim() == 4: img_embs = img_embs.flatten(1, 2) 
             if img_embs.dim() == 3 and img_embs.shape[0] != 1: img_embs = img_embs.view(1, -1, img_embs.shape[-1])
             t_db.stop()
@@ -74,4 +85,3 @@ with torch.no_grad():
         results.append({"Seq_Length": label, "Image Preprocessing": avg_preproc / measure_count, "Image Encoding (DB Load)": avg_encode / measure_count, "LLM Prefill": avg_prefill / measure_count})
 
 pd.DataFrame(results).to_csv("llava_seq_cached.csv", index=False)
-print("Saved llava_seq_cached.csv")
