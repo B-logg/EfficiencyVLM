@@ -4,10 +4,10 @@ import numpy as np
 
 # CSV 파일 로드
 files = {
-    "Qwen (E2E)": "qwen_e2e.csv",
-    "Qwen (Cached)": "qwen_cached.csv",
-    "LLaVA (E2E)": "llava_e2e.csv",
-    "LLaVA (Cached)": "llava_cached.csv"
+    "Qwen (E2E)": "qwen_e2e_breakdown.csv",
+    "Qwen (Cached)": "qwen_cached_breakdown.csv",
+    "LLaVA (E2E)": "llava_e2e_breakdown.csv",
+    "LLaVA (Cached)": "llava_cached_breakdown.csv"
 }
 
 dataframes = {}

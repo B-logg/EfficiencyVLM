@@ -117,5 +117,5 @@ with torch.no_grad():
                 
         results.append({"Resolution": label, "Image Preprocessing": avg_preproc / measure_count, "Image Encoding": avg_encode / measure_count, "LLM Prefill": avg_prefill / measure_count})
 
-pd.DataFrame(results).to_csv("llava_e2e.csv", index=False)
+pd.DataFrame(results).to_csv("llava_e2e_breakdown.csv", index=False)
 print("Saved llava_e2e.csv")

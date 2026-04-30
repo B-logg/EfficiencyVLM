@@ -62,5 +62,5 @@ with torch.no_grad():
                 
         results.append({"Resolution": label, "Image Preprocessing": avg_preproc / measure_count, "Image Encoding (DB Load)": avg_encode / measure_count, "LLM Prefill": avg_prefill / measure_count})
 
-pd.DataFrame(results).to_csv("qwen_cached.csv", index=False)
+pd.DataFrame(results).to_csv("qwen_cached_breakdown.csv", index=False)
 print("Saved qwen_cached.csv")
