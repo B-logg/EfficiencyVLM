@@ -1,79 +1,102 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
-# CSV 파일 로드
-files = {
-    "Qwen (E2E)": "qwen_e2e_breakdown.csv",
-    "Qwen (Cached)": "qwen_cached_breakdown.csv",
-    "LLaVA (E2E)": "llava_e2e_breakdown.csv",
-    "LLaVA (Cached)": "llava_cached_breakdown.csv"
-}
+# 막대 최상단에 총합 수치 또는 CRASH를 적어주는 헬퍼 함수
+def add_total_labels(ax, x_positions, totals, crashes):
+    for x, total, is_crash in zip(x_positions, totals, crashes):
+        if is_crash or total == 0:
+            ax.text(x, 50, "CRASH", ha='center', va='bottom', color='red', fontweight='bold', fontsize=10, rotation=90)
+        else:
+            # 총합(Total TTFT)을 소수점 1자리까지 표시
+            ax.text(x, total + total*0.02, f"{total:.1f}", ha='center', va='bottom', fontsize=10, fontweight='bold')
 
-dataframes = {}
-for name, file in files.items():
-    try:
-        dataframes[name] = pd.read_csv(file)
-        print(f"Loaded {file}")
-    except FileNotFoundError:
-        print(f"Warning: {file} not found. Skipping.")
-
-if not dataframes:
-    print("No CSV files found to plot.")
-    exit()
-
-# X축 레이블을 CSV에서 바로 가져옴
-resolutions = list(dataframes.values())[0]['Resolution'].tolist()
-
-fig, axes = plt.subplots(2, 2, figsize=(16, 12), sharey=True)
-axes = axes.flatten()
-colors = ['#1f77b4', '#ff7f0e', '#2ca02c'] 
-
-for idx, (model_name, df) in enumerate(dataframes.items()):
-    ax = axes[idx]
+def plot_stacked_comparison(model_name):
+    # CSV 파일명 (대소문자 맞춰서 로드, 사용하신 파일명 그대로 유지)
+    e2e_file = f"{model_name.lower()}_e2e_breakdown.csv"
+    cached_file = f"{model_name.lower()}_cached_breakdown.csv"
     
-    # 에러 방지 (길이 맞추기)
-    if len(df) < len(resolutions):
-        missing = len(resolutions) - len(df)
-        df_dummy = pd.DataFrame([{"Resolution": resolutions[len(df)+i], "Image Preprocessing": 0, "Image Encoding (DB Load)" if "Cached" in model_name else "Image Encoding": 0, "LLM Prefill": 0} for i in range(missing)])
-        df = pd.concat([df, df_dummy], ignore_index=True)
+    if not os.path.exists(e2e_file) or not os.path.exists(cached_file):
+        print(f"Warning: {e2e_file} or {cached_file} not found. Skipping {model_name}.")
+        return
 
-    if "Cached" in model_name:
-        bottom = np.zeros(len(df))
-        ax.bar(df['Resolution'], df['Image Preprocessing'], label='Image Preprocessing', color=colors[0])
-        bottom += df['Image Preprocessing'].fillna(0)
-        
-        # 컬럼 이름이 혹시 다를까봐 안전하게 가져오기
-        col_encode = 'Image Encoding (DB Load)' if 'Image Encoding (DB Load)' in df.columns else 'Image Encoding'
-        ax.bar(df['Resolution'], df[col_encode], bottom=bottom, label='DB Load + Fusion', color=colors[1])
-        bottom += df[col_encode].fillna(0)
-        
-        ax.bar(df['Resolution'], df['LLM Prefill'], bottom=bottom, label='LLM Prefill', color=colors[2])
-    else:
-        bottom = np.zeros(len(df))
-        ax.bar(df['Resolution'], df['Image Preprocessing'], label='Image Preprocessing', color=colors[0])
-        bottom += df['Image Preprocessing'].fillna(0)
-        ax.bar(df['Resolution'], df['Image Encoding'], bottom=bottom, label='Vision Encoding + Fusion', color=colors[1])
-        bottom += df['Image Encoding'].fillna(0)
-        ax.bar(df['Resolution'], df['LLM Prefill'], bottom=bottom, label='LLM Prefill', color=colors[2])
+    e2e = pd.read_csv(e2e_file)
+    cached = pd.read_csv(cached_file)
+    
+    # X축 토큰 수 매핑 (기존 448x448, 896x896... 대신 표시)
+    token_labels = ["256\n(Tokens)", "1K\n(Tokens)", "2K\n(Tokens)", "4K\n(Tokens)", "8K\n(Tokens)"]
+    
+    # 실제 데이터 길이에 맞춰 X축 생성 (안전장치)
+    data_len = len(e2e)
+    x = np.arange(data_len)
+    x_labels = token_labels[:data_len]
+    width = 0.35 # 막대 두께
+    
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    # 색상 팔레트 (E2E는 진한 색, Cached는 파스텔톤 연한 색상으로 대비를 줌)
+    colors_e2e = ['#1f77b4', '#ff7f0e', '#2ca02c']     # 파랑, 주황, 초록
+    colors_cached = ['#aec7e8', '#ffbb78', '#98df8a']  # 연파랑, 연주황, 연초록
+    
+    # ------------------ E2E (왼쪽 막대) ------------------
+    e2e_prep = e2e['Image Preprocessing'].fillna(0)
+    e2e_enc = e2e['Image Encoding'].fillna(0)
+    e2e_pref = e2e['LLM Prefill'].fillna(0)
+    
+    # 누적 막대 그리기
+    ax.bar(x - width/2, e2e_prep, width, label='Image Preproc (E2E)', color=colors_e2e[0], edgecolor='white')
+    ax.bar(x - width/2, e2e_enc, width, bottom=e2e_prep, label='Vision Encoding (E2E)', color=colors_e2e[1], edgecolor='white')
+    ax.bar(x - width/2, e2e_pref, width, bottom=e2e_prep+e2e_enc, label='LLM Prefill (E2E)', color=colors_e2e[2], edgecolor='white')
+    
+    # ------------------ Cached (오른쪽 막대) ------------------
+    cached_prep = cached['Image Preprocessing'].fillna(0)
+    # 캐시 데이터의 인코딩 컬럼명 확인
+    col_enc_cached = 'Image Encoding (DB Load)' if 'Image Encoding (DB Load)' in cached.columns else 'Image Encoding'
+    cached_enc = cached[col_enc_cached].fillna(0)
+    cached_pref = cached['LLM Prefill'].fillna(0)
+    
+    # 누적 막대 그리기
+    ax.bar(x + width/2, cached_prep, width, label='Image Preproc (Cached)', color=colors_cached[0], edgecolor='white')
+    ax.bar(x + width/2, cached_enc, width, bottom=cached_prep, label='DB Load (Cached)', color=colors_cached[1], edgecolor='white')
+    ax.bar(x + width/2, cached_pref, width, bottom=cached_prep+cached_enc, label='LLM Prefill (Cached)', color=colors_cached[2], edgecolor='white')
 
-    ax.set_title(f"{model_name} TTFT Breakdown by Resolution", fontsize=14, fontweight='bold')
-    ax.set_xlabel("Image Resolution (Native Input)", fontsize=12)
-    ax.set_ylabel("Latency (ms)", fontsize=12)
-    ax.tick_params(axis='x', rotation=45)
+    # ------------------ 수치 및 CRASH 표기 ------------------
+    # E2E 총합 및 에러 판별 (LLM Prefill이 0이면 CRASH로 간주)
+    e2e_totals = e2e_prep + e2e_enc + e2e_pref
+    e2e_crashes = (e2e_pref == 0)
+    add_total_labels(ax, x - width/2, e2e_totals, e2e_crashes)
+    
+    # Cached 총합 및 에러 판별
+    cached_totals = cached_prep + cached_enc + cached_pref
+    cached_crashes = (cached_pref == 0)
+    add_total_labels(ax, x + width/2, cached_totals, cached_crashes)
+
+    # ------------------ 차트 디자인 설정 ------------------
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels, fontsize=11, fontweight='bold')
+    ax.set_xlabel("Image Resolution", fontsize=12, fontweight='bold')
+    ax.set_ylabel("Latency (ms)", fontsize=12, fontweight='bold')
+    ax.set_title(f"{model_name.upper()} TTFT Breakdown (E2E vs Cached)", fontsize=16, fontweight='bold')
+    
     ax.grid(axis='y', linestyle='--', alpha=0.7)
     
-    # 0으로 기록된 Crash 구간 표시
-    for i, val in enumerate(bottom + df['LLM Prefill'].fillna(0)):
-        if val == 0:
-            ax.text(i, 50, "CRASH\n(Context Limit)", ha='center', va='bottom', color='red', fontweight='bold')
-        else:
-            ax.text(i, val + max(bottom.max(), 1)*0.02, f"{val:.1f}ms", ha='center', va='bottom', fontsize=10)
+    # 범례 설정 (위쪽에 가로로 길게 배치)
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels, loc='upper center', ncol=3, fontsize=10, bbox_to_anchor=(0.5, 1.15))
+    
+    plt.margins(y=0.15) # 텍스트 안 잘리게 여백 추가
+    plt.tight_layout()
+    
+    # 저장
+    os.makedirs('plots', exist_ok=True)
+    save_path = f"plots/{model_name.lower()}_breakdown_stacked.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {save_path}")
 
-# 범례 추가
-handles, labels = axes[0].get_legend_handles_labels()
-fig.legend(handles, labels, loc='upper center', ncol=3, fontsize=12, bbox_to_anchor=(0.5, 1.05))
-
-plt.tight_layout()
-plt.savefig("resolution_breakdown_plot.png", dpi=300, bbox_inches='tight')
-print("Plot saved as resolution_breakdown_plot.png")
+if __name__ == "__main__":
+    # Qwen과 LLaVA에 대해 각각 하나의 통합 그래프를 생성
+    plot_stacked_comparison("Qwen")
+    plot_stacked_comparison("LLaVA")
+    print("✅ Breakdown E2E vs Cached 그래프 렌더링 완료!")
