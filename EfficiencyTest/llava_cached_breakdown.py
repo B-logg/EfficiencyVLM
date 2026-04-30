@@ -25,8 +25,14 @@ class TTFTLogitsProcessor(LogitsProcessor):
 print("Loading LLaVA Cached Model...")
 model = LlavaNextForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, device_map=device).eval()
 
-# Cached도 동일하게 안전장치 해제
-processor = LlavaNextProcessor.from_pretrained(MODEL_ID, max_image_patches=200)
+processor = LlavaNextProcessor.from_pretrained(MODEL_ID)
+processor.image_processor.image_grid_pinpoints = [
+    [336, 336], [336, 672], [672, 336], [672, 672], 
+    [336, 1008], [1008, 336], [672, 1008], [1008, 672], 
+    [1008, 1008], [1344, 1344], [1680, 1680], [2016, 2016] # 8k 대응을 위해 격자 후보를 대폭 추가
+]
+
+processor.image_processor.max_image_patches = 100
 image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
 
 results = []
