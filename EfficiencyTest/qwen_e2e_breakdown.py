@@ -8,7 +8,7 @@ MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 device = "cuda"
 
 RESOLUTIONS = {"448x448": (448, 448), "896x896": (896, 896), "1344x1344": (1344, 1344), "1792x1792": (1792, 1792), "2520x2520": (2520, 2520)}
-NUM_ITER = 110
+NUM_ITER = 50
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)

@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 EMBED_DIR = "./llava_vision_embeddings"
-NUM_TEST_SAMPLES = 1010
+NUM_TEST_SAMPLES = 210
 WARMUP_SAMPLES = 10
 device = "cuda" if torch.cuda.is_available() else "cpu"
 

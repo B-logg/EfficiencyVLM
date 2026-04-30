@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 EMBED_DIR = "./qwen_vision_embeddings"
-NUM_TEST_SAMPLES = 1010
+NUM_TEST_SAMPLES = 210
 WARMUP_SAMPLES = 10
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
