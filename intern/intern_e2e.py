@@ -24,7 +24,7 @@ class TTFTLogitsProcessor(LogitsProcessor):
         return scores
 
 print("Loading InternVL E2E Model...")
-model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, _fast_init=False).eval().to(device)
+model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=False).eval().to(device)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 dataset = load_dataset("detection-datasets/coco", split=f"val[:{NUM_TEST_SAMPLES}]", trust_remote_code=True)
 
