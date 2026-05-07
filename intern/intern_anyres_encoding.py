@@ -15,6 +15,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 print("Loading InternVL Model for Encoding...")
 
+PreTrainedModel.all_tied_weights_keys = {}
+
 model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True).eval().to(device)
 
 

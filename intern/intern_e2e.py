@@ -27,6 +27,8 @@ class TTFTLogitsProcessor(LogitsProcessor):
 print("Loading InternVL E2E Model...")
 
 
+PreTrainedModel.all_tied_weights_keys = {}
+
 model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True).eval().to(device)
 
 

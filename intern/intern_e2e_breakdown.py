@@ -22,6 +22,8 @@ class TTFTLogitsProcessor(LogitsProcessor):
         if self.is_first: self.evt.record(); self.is_first = False
         return s
 
+PreTrainedModel.all_tied_weights_keys = {}
+
 
 model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True).eval().to(device)
 
