@@ -5,10 +5,8 @@ from transformers import AutoModel, AutoTokenizer, LogitsProcessor, LogitsProces
 from tqdm import tqdm
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
-
 from transformers.modeling_utils import PreTrainedModel # [추가된 부분]
 
-PreTrainedModel.all_tied_weights_keys = []
 MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 NUM_TEST_SAMPLES = 210
 WARMUP_SAMPLES = 10
@@ -28,18 +26,9 @@ class TTFTLogitsProcessor(LogitsProcessor):
 
 print("Loading InternVL E2E Model...")
 
-original_linspace = torch.linspace
-def patched_linspace(*args, **kwargs):
-    # device가 명시되지 않아 강제로 meta로 끌려가는 것을 방지하고 cpu로 고정
-    if kwargs.get('device') is None:
-        kwargs['device'] = torch.device('cpu')
-    return original_linspace(*args, **kwargs)
-
-torch.linspace = patched_linspace # 패치 적용
 
 model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True).eval().to(device)
 
-torch.linspace = original_linspace # 로드가 끝나면 원상복구
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 dataset = load_dataset("detection-datasets/coco", split=f"val[:{NUM_TEST_SAMPLES}]", trust_remote_code=True)
