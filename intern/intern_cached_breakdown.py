@@ -3,7 +3,7 @@ import pandas as pd
 from transformers import AutoModel, AutoTokenizer, LogitsProcessor, LogitsProcessorList
 from tqdm import tqdm
 
-MODEL_ID = "OpenGVLab/InternVL3.5-8B"
+MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 device = "cuda"
 
 RESOLUTIONS = {"256 (Tokens)": (1, 1), "1K (Tokens)": (2, 2), "2K (Tokens)": (2, 4), "4K (Tokens)": (4, 4), "8K (Tokens)": (4, 8)}

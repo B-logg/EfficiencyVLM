@@ -4,7 +4,7 @@ from datasets import load_dataset
 from transformers import AutoModel, AutoTokenizer, LogitsProcessor, LogitsProcessorList
 from tqdm import tqdm
 
-MODEL_ID = "OpenGVLab/InternVL3.5-8B"
+MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 EMBED_DIR = "./internvl_vision_embeddings"
 NUM_TEST_SAMPLES = 210
 WARMUP_SAMPLES = 10

@@ -6,7 +6,7 @@ from datasets import load_dataset
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 
-MODEL_ID = "OpenGVLab/InternVL3.5-8B"
+MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 SAVE_DIR = "./internvl_vision_embeddings"
 NUM_TEST_SAMPLES = 1010
 os.makedirs(SAVE_DIR, exist_ok=True)
