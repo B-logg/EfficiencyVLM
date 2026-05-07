@@ -50,7 +50,8 @@ with torch.no_grad():
             vit = model.vision_model(pixel_values).last_hidden_state[:, 1:, :]
             b, s, c = vit.shape
             vit = vit.reshape(b, int(s**0.5), int(s**0.5), c).unfold(1, 2, 2).unfold(2, 2, 2).reshape(b, int(s**0.5)//2, int(s**0.5)//2, 4, c).reshape(b, int(s**0.5)//2, int(s**0.5)//2, c*4).reshape(b, -1, c*4)
-            img_embs = model.mlp1(vit).reshape(-1, model.config.hidden_size)
+            img_embs = model.mlp1(vit)
+            img_embs = img_embs.reshape(-1, img_embs.shape[-1])
             t_enc.stop()
 
             # 3. Prefill (Text + Fusion + Gen 묶음)
