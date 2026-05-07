@@ -8,8 +8,7 @@ from torchvision.transforms.functional import InterpolationMode
 
 from transformers.modeling_utils import PreTrainedModel # [추가된 부분]
 
-
-PreTrainedModel.all_tied_weights_keys = property(lambda self: {})
+PreTrainedModel.all_tied_weights_keys = []
 MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 NUM_TEST_SAMPLES = 210
 WARMUP_SAMPLES = 10
