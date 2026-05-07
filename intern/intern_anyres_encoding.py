@@ -13,7 +13,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 print("Loading InternVL Model for Encoding...")
-model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True, device_map=device).eval()
+model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True).eval().to(device)
 
 transform = T.Compose([
     T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
