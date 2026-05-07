@@ -2,6 +2,10 @@ import os, torch, time
 import pandas as pd
 from transformers import AutoModel, AutoTokenizer, LogitsProcessor, LogitsProcessorList
 from tqdm import tqdm
+from transformers.modeling_utils import PreTrainedModel # [추가된 부분]
+
+
+PreTrainedModel.all_tied_weights_keys = property(lambda self: {})
 
 MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 device = "cuda"

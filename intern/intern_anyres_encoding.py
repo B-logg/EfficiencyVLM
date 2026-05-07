@@ -5,6 +5,10 @@ from tqdm import tqdm
 from datasets import load_dataset
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
+from transformers.modeling_utils import PreTrainedModel # [추가된 부분]
+
+
+PreTrainedModel.all_tied_weights_keys = property(lambda self: {})
 
 MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 SAVE_DIR = "./internvl_vision_embeddings"
