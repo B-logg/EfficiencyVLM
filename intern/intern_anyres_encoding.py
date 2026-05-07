@@ -13,7 +13,19 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 print("Loading InternVL Model for Encoding...")
-model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=False).eval().to(device)
+
+original_linspace = torch.linspace
+def patched_linspace(*args, **kwargs):
+    # device가 명시되지 않아 강제로 meta로 끌려가는 것을 방지하고 cpu로 고정
+    if kwargs.get('device') is None:
+        kwargs['device'] = torch.device('cpu')
+    return original_linspace(*args, **kwargs)
+
+torch.linspace = patched_linspace # 패치 적용
+
+model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=True).eval().to(device)
+
+torch.linspace = original_linspace # 로드가 끝나면 원상복구
 
 transform = T.Compose([
     T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
