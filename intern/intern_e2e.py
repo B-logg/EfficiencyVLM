@@ -87,7 +87,7 @@ with torch.no_grad():
 
         if idx >= WARMUP_SAMPLES:
             r_img, r_vit, r_unsh, r_mlp, r_txt, r_fus = t_img.get_time(), t_vit.get_time(), t_unsh.get_time(), t_mlp.get_time(), t_txt.get_time(), t_fus.get_time()
-            r_ttft = t_gen.start_event.elapsed_time(hnd.evt) / 1000.0
+            r_ttft = t_gen.s.elapsed_time(hnd.evt) / 1000.0
             true_ttft = r_img + r_vit + r_unsh + r_mlp + r_txt + r_fus + r_ttft
             decode = (t_gen.get_time() - r_ttft) if outs.shape[1] > 1 else 0.0
             results.append([r_img, r_vit, r_unsh, r_mlp, r_txt, r_fus, r_ttft, true_ttft, decode, true_ttft+decode, torch.cuda.max_memory_allocated()/(1024**3), outs.shape[1]])
