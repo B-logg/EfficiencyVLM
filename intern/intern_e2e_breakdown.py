@@ -55,15 +55,25 @@ with torch.no_grad():
 
             # 3. Prefill (Text + Fusion + Gen 묶음)
             t_pref.start()
-            txt_in = tokenizer("User: <image>\nDescribe.\nAssistant:", return_tensors="pt").to(device)
-            in_embs = model.language_model.get_input_embeddings()(txt_in.input_ids)
-            idx_img = torch.where(txt_in.input_ids == tokenizer.convert_tokens_to_ids("<image>"))[1][0]
+            tok_1 = tokenizer("User: ", return_tensors="pt", add_special_tokens=True).input_ids.to(device)
+            tok_2 = tokenizer("\nDescribe.\nAssistant:", return_tensors="pt", add_special_tokens=False).input_ids.to(device)
             
-            allowed = 4096 - in_embs.shape[1] - 50
-            if img_embs.shape[0] > allowed: img_embs = img_embs[:allowed, :]
+            emb_1 = model.language_model.get_input_embeddings()(tok_1)
+            emb_2 = model.language_model.get_input_embeddings()(tok_2)
+            
+            # 에러 방지용 Truncation
+            allowed = 4096 - emb_1.shape[1] - emb_2.shape[1] - 50
+            if img_embs.shape[0] > allowed: 
+                img_embs = img_embs[:allowed, :]
 
-            f_embs = torch.cat([in_embs[:, :idx_img, :], img_embs.unsqueeze(0), in_embs[:, idx_img+1:, :]], dim=1)
-            f_mask = torch.cat([txt_in.attention_mask[:, :idx_img], torch.ones((1, img_embs.shape[0]), device=device), txt_in.attention_mask[:, idx_img+1:]], dim=1)
+            # 임베딩 & 마스크 샌드위치 결합
+            f_embs = torch.cat([emb_1, img_embs.unsqueeze(0), emb_2], dim=1)
+            f_mask = torch.cat([
+                torch.ones_like(tok_1), 
+                torch.ones((1, img_embs.shape[0]), dtype=tok_1.dtype, device=device), 
+                torch.ones_like(tok_2)
+            ], dim=1)
+            
             try:
                 torch.cuda.synchronize(); hnd = TTFTLogitsProcessor()
                 model.language_model.generate(inputs_embeds=f_embs, attention_mask=f_mask, max_new_tokens=10, logits_processor=LogitsProcessorList([hnd])); t_pref.stop(); torch.cuda.synchronize()
