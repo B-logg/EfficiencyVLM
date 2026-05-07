@@ -20,7 +20,7 @@ class TTFTLogitsProcessor(LogitsProcessor):
         if self.is_first: self.evt.record(); self.is_first = False
         return s
 
-model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True).eval().to(device)
+model = AutoModel.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, trust_remote_code=True).eval().to(device)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
 results = []
 
