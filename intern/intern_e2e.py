@@ -6,7 +6,7 @@ from tqdm import tqdm
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 
-MODEL_ID = "OpenGVLab/InternVL2_5-2B"
+MODEL_ID = "OpenGVLab/InternVL3.5-8B"
 NUM_TEST_SAMPLES = 210
 WARMUP_SAMPLES = 10
 device = "cuda" if torch.cuda.is_available() else "cpu"
