@@ -36,13 +36,39 @@ def load_jsonl(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
+_TIMING_COND_RE = re.compile(r"^(sweep\d+_(?:msrvtt|mvbench)_fps\d+(?:_nf\d+)?)_(\d{8}_\d{6})$")
+
+def _pick_latest_timings(timing_dir: str) -> set:
+    """sweep 조건별 최신 파일만 반환 (non-sweep 파일은 전부 포함)."""
+    best: Dict[str, tuple] = {}
+    non_sweep = []
+    for p in Path(timing_dir).glob("*.jsonl"):
+        if p.stat().st_size == 0:
+            continue
+        m = _TIMING_COND_RE.match(p.stem)
+        if not m:
+            non_sweep.append(p)
+            continue
+        key, ts = m.group(1), m.group(2)
+        if key not in best or ts > best[key][0]:
+            best[key] = (ts, p)
+    return set(v[1] for v in best.values()) | set(non_sweep)
+
+
 def load_all_timings(timing_dir: str) -> pd.DataFrame:
     records = []
-    for p in Path(timing_dir).glob("*.jsonl"):
+    for p in _pick_latest_timings(timing_dir):
         for row in load_jsonl(str(p)):
             row["_source"] = p.stem
             records.append(row)
     return pd.DataFrame(records) if records else pd.DataFrame()
+
+
+def _stage_filter(df: pd.DataFrame, stage: str) -> pd.DataFrame:
+    """stage 컬럼으로 필터링 (NaN 안전)."""
+    if "stage" not in df.columns:
+        return df.iloc[0:0]
+    return df[df["stage"].fillna("") == stage]
 
 
 _COND_RE = re.compile(r"^(sweep\d+_(?:msrvtt|mvbench)_fps\d+(?:_nf\d+)?)_(\d{8}_\d{6})$")
@@ -112,8 +138,7 @@ def make_table1(timings: pd.DataFrame, output_dir: str):
         print("[Table 1] 데이터 없음")
         return
 
-    sweep1 = timings[(timings.get("stage", pd.Series()) == "A") &
-                     timings["_source"].str.contains("sweep1", na=False)]
+    sweep1 = _stage_filter(timings[timings["_source"].str.contains("sweep1", na=False)], "A")
 
     rows = []
     for src, grp in sweep1.groupby("_source"):
@@ -286,7 +311,7 @@ def make_figure1(timings: pd.DataFrame, output_dir: str):
     ] if not timings.empty else pd.DataFrame()
 
     if sweep1_done.empty:
-        print("[Figure 1] 데이터 없음")
+        print("[Figure 1] No data")
         return
 
     fig, ax = plt.subplots(figsize=(6, 5))
@@ -310,7 +335,7 @@ def make_figure1(timings: pd.DataFrame, output_dir: str):
     ax.plot([0, max_fps], [0, max_fps], "--", color="gray", label="ideal")
     ax.set_xlabel("target_fps")
     ax.set_ylabel("fps_actual")
-    ax.set_title("Figure 1: FPS 따라잡기 능력 (대각선=ideal)")
+    ax.set_title("Figure 1: Actual FPS vs Target FPS (diagonal = ideal)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     path = os.path.join(output_dir, "figure1_fps_actual.png")
@@ -323,13 +348,10 @@ def make_figure1(timings: pd.DataFrame, output_dir: str):
 
 def make_figure2(timings: pd.DataFrame, output_dir: str):
     if timings.empty:
-        print("[Figure 2] 데이터 없음")
+        print("[Figure 2] No data")
         return
 
-    sweep1_frames = timings[
-        (timings.get("stage", pd.Series()) == "A") &
-        timings["_source"].str.contains("sweep1", na=False)
-    ]
+    sweep1_frames = _stage_filter(timings[timings["_source"].str.contains("sweep1", na=False)], "A")
 
     agg = defaultdict(lambda: defaultdict(list))
     for _, row in sweep1_frames.iterrows():
@@ -343,7 +365,7 @@ def make_figure2(timings: pd.DataFrame, output_dir: str):
 
     fps_vals = sorted(agg.keys())
     if not fps_vals:
-        print("[Figure 2] 데이터 없음")
+        print("[Figure 2] No data")
         return
 
     cols = ["t_decode_ms", "t_preprocess_ms", "t_vit_forward_ms"]
@@ -371,13 +393,10 @@ def make_figure2(timings: pd.DataFrame, output_dir: str):
 
 def make_figure3(timings: pd.DataFrame, output_dir: str):
     if timings.empty:
-        print("[Figure 3] 데이터 없음")
+        print("[Figure 3] No data")
         return
 
-    sweep2 = timings[
-        (timings.get("stage", pd.Series()) == "B") &
-        timings["_source"].str.contains("sweep2", na=False)
-    ]
+    sweep2 = _stage_filter(timings[timings["_source"].str.contains("sweep2", na=False)], "B")
 
     fig, ax = plt.subplots(figsize=(6, 5))
     for dataset in ["msrvtt", "mvbench"]:
@@ -399,12 +418,9 @@ def make_figure3(timings: pd.DataFrame, output_dir: str):
             nf_sorted = [nf_vals[i] for i in order]
             p50_sorted = [p50s[i] for i in order]
             p95_sorted = [p95s[i] for i in order]
-            ax.errorbar(
-                nf_sorted, p50_sorted,
-                yerr=[np.array(p50_sorted) - np.array([0]*len(p50_sorted)),
-                      np.array(p95_sorted) - np.array(p50_sorted)],
-                marker="o", label=dataset, capsize=4,
-            )
+            color = ax._get_lines.get_next_color()
+            ax.plot(nf_sorted, p50_sorted, "o-", color=color, label=f"{dataset} p50")
+            ax.plot(nf_sorted, p95_sorted, "s--", color=color, alpha=0.6, label=f"{dataset} p95")
 
     ax.set_xlabel("num_frames (N)")
     ax.set_ylabel("t_query_total (ms)")
@@ -421,16 +437,22 @@ def make_figure3(timings: pd.DataFrame, output_dir: str):
 
 def make_figure4(timings: pd.DataFrame, responses: pd.DataFrame, output_dir: str):
     if responses.empty or timings.empty:
-        print("[Figure 4] 데이터 없음")
+        print("[Figure 4] No data")
         return
 
     import re as _re
 
     def get_acc(grp, dataset):
         if dataset == "msrvtt":
-            def norm(t):
+            def extract_ans(t):
+                t = str(t)
+                pos = t.find("<frame>")
+                if pos != -1:
+                    t = t[:pos]
+                return _re.sub(r"\s+", " ", _re.sub(r"[^\w\s]", "", t.lower().strip()))
+            def norm_gold(t):
                 return _re.sub(r"\s+", " ", _re.sub(r"[^\w\s]", "", str(t).lower().strip()))
-            n = sum(norm(r) == norm(g) for r, g in zip(grp["response"], grp["answer_gt"]))
+            n = sum(norm_gold(g) in extract_ans(r) for r, g in zip(grp["response"], grp["answer_gt"]))
             return n / len(grp)
         else:
             def extract_opt(t):
@@ -439,10 +461,7 @@ def make_figure4(timings: pd.DataFrame, responses: pd.DataFrame, output_dir: str
             preds = grp["response"].apply(extract_opt)
             return (preds == grp["answer_gt"].str.strip().str.upper()).mean()
 
-    sweep2_timing = timings[
-        (timings.get("stage", pd.Series()) == "B") &
-        timings["_source"].str.contains("sweep2", na=False)
-    ]
+    sweep2_timing = _stage_filter(timings[timings["_source"].str.contains("sweep2", na=False)], "B")
 
     fig, ax = plt.subplots(figsize=(6, 5))
     for dataset in ["msrvtt", "mvbench"]:
@@ -489,7 +508,7 @@ def make_figure5(embed_dir: str, output_dir: str):
             if not fps_match:
                 continue
             fps = int(fps_match.group(1))
-            sizes = [f.stat().st_size for f in fps_dir.glob("*.pt")]
+            sizes = [f.stat().st_size for f in fps_dir.rglob("*.pt")]
             if sizes:
                 data[dataset][fps] = sizes
 
@@ -497,11 +516,14 @@ def make_figure5(embed_dir: str, output_dir: str):
     for dataset, fps_dict in data.items():
         fps_vals = sorted(fps_dict.keys())
         mb_means = [np.mean(fps_dict[f]) / 1e6 for f in fps_vals]
-        ax.plot(fps_vals, mb_means, "o-", label=dataset)
+        if len(fps_vals) == 1:
+            ax.scatter(fps_vals, mb_means, label=dataset, zorder=3, s=80)
+        else:
+            ax.plot(fps_vals, mb_means, "o-", label=dataset)
 
     ax.set_xlabel("target_fps")
     ax.set_ylabel("MB/video (mean)")
-    ax.set_title("Figure 5: 저장 용량 vs target_fps")
+    ax.set_title("Figure 5: Storage Size vs target_fps")
     ax.legend()
     ax.grid(True, alpha=0.3)
     path = os.path.join(output_dir, "figure5_storage_vs_fps.png")
@@ -514,13 +536,10 @@ def make_figure5(embed_dir: str, output_dir: str):
 
 def make_figure6(timings: pd.DataFrame, output_dir: str):
     if timings.empty:
-        print("[Figure 6] 데이터 없음")
+        print("[Figure 6] No data")
         return
 
-    sweep2 = timings[
-        (timings.get("stage", pd.Series()) == "B") &
-        timings["_source"].str.contains("sweep2", na=False)
-    ]
+    sweep2 = _stage_filter(timings[timings["_source"].str.contains("sweep2", na=False)], "B")
 
     cols_map = {
         "t_load_pt_ms": "load_pt",
@@ -531,14 +550,14 @@ def make_figure6(timings: pd.DataFrame, output_dir: str):
     }
     existing = [c for c in cols_map if c in sweep2.columns]
     if not existing:
-        print("[Figure 6] 컬럼 없음")
+        print("[Figure 6] No columns")
         return
 
     means = {cols_map[c]: sweep2[c].dropna().mean() for c in existing}
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.barh(list(means.keys()), list(means.values()))
     ax.set_xlabel("ms (mean)")
-    ax.set_title("Figure 6: Stage B latency 분해")
+    ax.set_title("Figure 6: Stage B Latency Breakdown")
     ax.grid(True, alpha=0.3, axis="x")
     path = os.path.join(output_dir, "figure6_stageB_breakdown.png")
     fig.savefig(path, dpi=150, bbox_inches="tight")

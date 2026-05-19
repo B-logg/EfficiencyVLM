@@ -125,7 +125,7 @@ def query_single(
 
     # 5. 원본 프레임 재추출 (grounding)
     t_reextract = 0.0
-    if frame_ok and "video_path" in payload:
+    if frame_ok and "source_path" in payload:
         t0_re = time.perf_counter()
         pil_frame = reextract_frame(
             video_path=payload["source_path"],
