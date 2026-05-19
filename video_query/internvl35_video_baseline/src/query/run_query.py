@@ -24,6 +24,7 @@ from typing import Dict, Any, List, Iterator
 
 import torch
 import yaml
+from tqdm import tqdm
 
 ROOT = str(Path(__file__).resolve().parents[2])
 if ROOT not in sys.path:
@@ -218,9 +219,17 @@ def main():
     logger.info(f"측정 시작 (run_id={run_id})")
     results = []
     n_ok = n_skip = n_na = 0
+    total = args.max_samples or None
 
     with open(response_path, "w") as resp_f:
-        for i, item in enumerate(iter_qa(args.dataset, args.data_root)):
+        pbar = tqdm(
+            iter_qa(args.dataset, args.data_root),
+            desc=f"Stage B [{args.dataset} nf={args.num_frames}]",
+            total=total,
+            unit="item",
+            dynamic_ncols=True,
+        )
+        for i, item in enumerate(pbar):
             if args.max_samples and i >= args.max_samples:
                 break
 
@@ -233,12 +242,15 @@ def main():
 
             if result is None:
                 n_skip += 1
+                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na)
                 continue
             if result.get("status") == "skipped_F_lt_N":
                 n_na += 1
+                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na)
                 continue
 
             n_ok += 1
+            pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na)
             resp_f.write(json.dumps(result, ensure_ascii=False) + "\n")
 
     timing_logger.log({

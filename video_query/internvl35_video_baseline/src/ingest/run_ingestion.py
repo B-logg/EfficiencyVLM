@@ -22,6 +22,7 @@ import torch
 import yaml
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 ROOT = str(Path(__file__).resolve().parents[2])
 if ROOT not in sys.path:
@@ -176,6 +177,7 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--run_id", default=None)
     parser.add_argument("--lock_clocks", action="store_true")
+    parser.add_argument("--max_videos", type=int, default=None, help="처리할 최대 영상 수 (디버그용)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -201,11 +203,15 @@ def main():
     with open(args.video_list) as f:
         entries = [line.strip().split("\t") for line in f if line.strip()]
 
+    if args.max_videos:
+        entries = entries[: args.max_videos]
+
     logger.info(f"총 {len(entries)}개 영상 처리 시작 (target_fps={args.target_fps})")
     t_dataset_start = time.perf_counter()
 
     n_ok = n_skip = 0
-    for video_id, video_path in entries:
+    pbar = tqdm(entries, desc=f"Stage A [{args.dataset} {args.target_fps}fps]", unit="video", dynamic_ncols=True)
+    for video_id, video_path in pbar:
         output_path = os.path.join(args.output_dir, f"{video_id}.pt")
         if os.path.exists(output_path):
             logger.debug(f"[CACHE] {video_id} 이미 존재, skip")
@@ -228,6 +234,7 @@ def main():
             n_skip += 1
         else:
             n_ok += 1
+        pbar.set_postfix(ok=n_ok, skip=n_skip)
 
     t_dataset_total = (time.perf_counter() - t_dataset_start) / 60
     timing_logger.log({

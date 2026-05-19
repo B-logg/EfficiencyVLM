@@ -72,7 +72,8 @@ except RuntimeError as e:
         --embed_dir "$embed_dir" \
         --data_root "$data_root" \
         --model_path "$MODEL_PATH" \
-        --device "$DEVICE"
+        --device "$DEVICE" \
+        --max_samples 200
 
     echo "--- 완료: ${dataset} nf=${num_frames} ---"
 }
