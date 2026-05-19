@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sweep 1 — Stage A 부하 실험 (FPS sweep)
 # §3: target_fps ∈ {1, 2, 5, 10, 30}, num_frames=8 고정 (권장 대안 A)
-# §5: 각 sweep 전후 5분 cooldown
+# §5: 각 sweep 전후 1분 cooldown
 set -euo pipefail
 
 MODEL_PATH="${MODEL_PATH:-OpenGVLab/InternVL3_5-8B}"
@@ -27,8 +27,8 @@ python -m pytest tests/test_frame_indexing.py -v --tb=short || {
 echo "[Gate] PASS"
 
 cooldown() {
-    echo "=== Cooldown 5분 ==="
-    sleep 300
+    echo "=== Cooldown 1분 ==="
+    sleep 60
 }
 
 run_stage_a() {

@@ -23,7 +23,7 @@ def load_msrvtt_qa(
         }
     """
     qa_path = os.path.join(data_root, f"{split}_qa.json")
-    video_dir = os.path.join(data_root, "videos", "all")
+    video_dir = os.path.join(data_root, "videos")
 
     with open(qa_path) as f:
         qa_list = json.load(f)
