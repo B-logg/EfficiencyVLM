@@ -1,14 +1,23 @@
 """
-MSRVTT-QA 평가: Exact Match (EM) + 선택적 GPT-4 judge.
-§8 한계: ground truth frame 번호 라벨 없음, 텍스트 답변만 정량화.
+MSRVTT-QA 평가: Exact Match (EM) + contains 기반 soft match.
+모델 응답은 "answer text\n<frame>K</frame>" 형태이므로
+<frame> 이전 텍스트를 answer로 추출 후 비교.
 """
 from __future__ import annotations
 import json
 import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 
-def normalize_answer(text: str) -> str:
+def extract_answer(response: str) -> str:
+    """<frame>K</frame> 이전 텍스트를 답변으로 추출."""
+    frame_pos = response.find("<frame>")
+    if frame_pos != -1:
+        response = response[:frame_pos]
+    return response.strip()
+
+
+def normalize(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^\w\s]", "", text)
     text = re.sub(r"\s+", " ", text)
@@ -16,7 +25,12 @@ def normalize_answer(text: str) -> str:
 
 
 def exact_match(pred: str, gold: str) -> bool:
-    return normalize_answer(pred) == normalize_answer(gold)
+    return normalize(pred) == normalize(gold)
+
+
+def contains_match(pred: str, gold: str) -> bool:
+    """gold가 pred에 포함되면 정답."""
+    return normalize(gold) in normalize(pred)
 
 
 def load_responses(jsonl_path: str) -> List[Dict[str, Any]]:
@@ -30,31 +44,37 @@ def load_responses(jsonl_path: str) -> List[Dict[str, Any]]:
 
 
 def evaluate_em(jsonl_path: str) -> Dict[str, float]:
-    """Exact Match 계산."""
     results = load_responses(jsonl_path)
     n_total = len(results)
     if n_total == 0:
-        return {"em": 0.0, "n": 0}
+        print("MSRVTT-QA: 응답 없음 (빈 파일)")
+        return {"em": 0.0, "contains": 0.0, "n": 0}
 
-    n_correct = sum(
-        1 for r in results
-        if exact_match(r.get("response", ""), r.get("answer_gt", ""))
-    )
-    em = n_correct / n_total
-    print(f"MSRVTT-QA EM: {em:.4f} ({n_correct}/{n_total})")
-    return {"em": em, "n_correct": n_correct, "n_total": n_total}
+    n_em = n_contains = 0
+    for r in results:
+        pred = extract_answer(r.get("response", ""))
+        gold = r.get("answer_gt", "")
+        if exact_match(pred, gold):
+            n_em += 1
+        if contains_match(pred, gold):
+            n_contains += 1
+
+    em = n_em / n_total
+    cont = n_contains / n_total
+    print(f"MSRVTT-QA EM: {em:.4f} ({n_em}/{n_total})")
+    print(f"MSRVTT-QA Contains: {cont:.4f} ({n_contains}/{n_total})")
+    return {"em": em, "contains": cont, "n_em": n_em, "n_contains": n_contains, "n_total": n_total}
 
 
 def evaluate_frame_grounding_qualitative(
     jsonl_path: str,
     n_samples: int = 50,
 ) -> List[Dict[str, Any]]:
-    """
-    §8: frame grounding은 dataset당 50개 qualitative sample로 검증.
-    frame_ok 비율만 보고.
-    """
     results = load_responses(jsonl_path)[:n_samples]
-    frame_ok_rate = sum(1 for r in results if r.get("frame_ok", False)) / max(len(results), 1)
+    if not results:
+        print("Frame grounding: 응답 없음")
+        return []
+    frame_ok_rate = sum(1 for r in results if r.get("frame_ok", False)) / len(results)
     print(f"Frame grounding parsed OK: {frame_ok_rate:.2%} ({len(results)} samples)")
     return results
 

@@ -152,6 +152,7 @@ def query_single(
 
     return {
         "video_id": video_id,
+        "task": item.get("task", ""),
         "question": question,
         "answer_gt": item.get("answer", ""),
         "response": response,

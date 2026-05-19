@@ -39,7 +39,7 @@ def evaluate_mvbench(jsonl_path: str) -> Dict[str, Any]:
     for r in results:
         pred_option = extract_option(r.get("response", ""))
         gold = r.get("answer_gt", "").strip().upper()
-        task = r.get("video_id", "unknown").split("/")[0] if "/" in r.get("video_id", "") else "unknown"
+        task = r.get("task") or (r.get("video_id", "unknown").split("/")[0] if "/" in r.get("video_id", "") else "unknown")
 
         task_total[task] += 1
         if pred_option == gold:
