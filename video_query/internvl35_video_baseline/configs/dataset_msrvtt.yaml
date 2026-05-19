@@ -1,0 +1,7 @@
+dataset: msrvtt
+data_root: data/msrvtt
+split: test
+video_dir: videos/all
+qa_file: test_qa.json
+video_list: video_list.tsv
+min_duration_sec: 10  # 10초 미만 영상 자동 제외

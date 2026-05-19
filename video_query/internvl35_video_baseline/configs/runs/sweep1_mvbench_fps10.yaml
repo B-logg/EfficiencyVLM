@@ -1,0 +1,10 @@
+defaults:
+  - base
+  - dataset_mvbench
+
+sweep: 1
+target_fps: 10
+num_frames: 8
+embed_dir: outputs/embeddings/mvbench/10fps
+run_id_prefix: sweep1_mvbench_fps10
+# MVBench × 30fps: context check 필요 (context_check.py 자동 검사)

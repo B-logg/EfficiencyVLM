@@ -1,0 +1,9 @@
+defaults:
+  - base
+  - dataset_msrvtt
+
+sweep: 1
+target_fps: 10
+num_frames: 8
+embed_dir: outputs/embeddings/msrvtt/10fps
+run_id_prefix: sweep1_msrvtt_fps10

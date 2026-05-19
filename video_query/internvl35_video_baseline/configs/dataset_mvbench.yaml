@@ -1,0 +1,6 @@
+dataset: mvbench
+data_root: data/mvbench
+json_dir: json
+video_dir: video
+tasks: all  # 20 sub-tasks 전체
+min_duration_sec: 10
