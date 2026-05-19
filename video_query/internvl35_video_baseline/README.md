@@ -42,7 +42,7 @@ embed_with_cache():
 | Sweep | 변수 | 값 | 고정 값 | 영상 수 (조건당) |
 |-------|------|-----|---------|----------------|
 | 1 (Stage A) | `target_fps` | 1, 2, 5, 10, 30 | `num_frames=8` | 100 |
-| 2 (Stage B) | `num_frames` | 8, 16, 32 | `target_fps=5` | 100 |
+| 2 (Stage B) | `num_frames` | 4, 8, 16 | `target_fps=5` | 100 |
 
 각 조건은 독립 프로세스로 실행되므로 조건마다 100개씩 처리.
 

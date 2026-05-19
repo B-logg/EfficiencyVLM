@@ -14,7 +14,7 @@ cd "$BASE_DIR"
 
 echo "================================================================"
 echo "Sweep 2: Stage B num_frames sweep"
-echo "target_fps: 5 (fixed) | num_frames: 8 16 32"
+echo "target_fps: 5 (fixed) | num_frames: 4 8 16"
 echo "================================================================"
 
 # Gate tests
@@ -34,8 +34,8 @@ python -m pytest tests/test_subsample_skip.py tests/test_injector_smoke.py -v --
 echo "[Gate] 모든 PASS"
 
 cooldown() {
-    echo "=== Cooldown 5분 ==="
-    sleep 300
+    echo "=== Cooldown 1분 ==="
+    sleep 60
 }
 
 run_stage_b() {
@@ -81,7 +81,7 @@ except RuntimeError as e:
 # ── MSRVTT-QA ─────────────────────────────────────────────
 echo ""
 echo "=== MSRVTT-QA ==="
-for nf in 8 16 32; do
+for nf in 4 8 16; do
     run_stage_b "msrvtt" "$nf" "$MSRVTT_ROOT"
 done
 
@@ -90,7 +90,7 @@ cooldown
 # ── MVBench ───────────────────────────────────────────────
 echo ""
 echo "=== MVBench ==="
-for nf in 8 16 32; do
+for nf in 4 8 16; do
     run_stage_b "mvbench" "$nf" "$MVBENCH_ROOT"
 done
 
