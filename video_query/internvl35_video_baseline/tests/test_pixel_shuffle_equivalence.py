@@ -94,7 +94,9 @@ def run_split_pipeline(model_full, tokenizer, frames: list, question: str, devic
         tiles = dynamic_preprocess_video(frame, image_size=448, max_num=1)
         pv = torch.stack([transform(t) for t in tiles]).to(device, dtype=torch.bfloat16)
         with torch.no_grad():
-            feat = model_full.vision_model(pv).last_hidden_state  # [1, 1024, D_vit]
+            feat = model_full.vision_model(pv).last_hidden_state  # [1, 1025, D_vit] (CLS 포함)
+        if feat.shape[1] == 1025:
+            feat = feat[:, 1:, :]  # CLS 토큰 제거 → [1, 1024, D_vit]
         shuffled = ps(feat, scale_factor=0.5)  # [1, 256, D_vit*4]
         vit_outputs.append(shuffled)
 
