@@ -74,6 +74,7 @@ def run_official_chat(model_full, tokenizer, frames: list, question: str, device
         pixel_values,
         prompt,
         generation_config=gen_config,
+        num_patches_list=[1] * n,  # 프레임당 타일 1개 → N개 <image> 각각 256 IMG_CONTEXT
         return_history=True,
     )
     return response
