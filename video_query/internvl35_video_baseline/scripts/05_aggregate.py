@@ -45,9 +45,26 @@ def load_all_timings(timing_dir: str) -> pd.DataFrame:
     return pd.DataFrame(records) if records else pd.DataFrame()
 
 
+_COND_RE = re.compile(r"^(sweep\d+_(?:msrvtt|mvbench)_fps\d+(?:_nf\d+)?)_(\d{8}_\d{6})$")
+
+def _pick_latest_responses(response_dir: str) -> Dict[str, Path]:
+    """조건별 최신 비어있지 않은 JSONL 파일만 반환."""
+    best: Dict[str, tuple] = {}
+    for p in Path(response_dir).glob("sweep*.jsonl"):
+        if p.stat().st_size == 0:
+            continue
+        m = _COND_RE.match(p.stem)
+        if not m:
+            continue
+        key, ts = m.group(1), m.group(2)
+        if key not in best or ts > best[key][0]:
+            best[key] = (ts, p)
+    return {k: v[1] for k, v in best.items()}
+
+
 def load_all_responses(response_dir: str) -> pd.DataFrame:
     records = []
-    for p in Path(response_dir).glob("sweep*.jsonl"):
+    for key, p in _pick_latest_responses(response_dir).items():
         for row in load_jsonl(str(p)):
             row["_source"] = p.stem
             records.append(row)
@@ -196,10 +213,15 @@ def make_table4(responses: pd.DataFrame, output_dir: str):
 
         if dataset == "msrvtt":
             def norm(t):
-                return _re.sub(r"\s+", " ", _re.sub(r"[^\w\s]", "", str(t).lower().strip()))
-            n_correct = sum(norm(r) == norm(g) for r, g in zip(grp["response"], grp["answer_gt"]))
+                # <frame>K</frame> 이전 텍스트만 추출 후 정규화
+                t = str(t)
+                frame_pos = t.find("<frame>")
+                if frame_pos != -1:
+                    t = t[:frame_pos]
+                return _re.sub(r"\s+", " ", _re.sub(r"[^\w\s]", "", t.lower().strip()))
+            n_correct = sum(norm(g) in norm(r) for r, g in zip(grp["response"], grp["answer_gt"]))
             acc = n_correct / len(grp)
-            metric = "EM"
+            metric = "Contains"
         else:
             pred_opts = grp["response"].apply(extract_option)
             n_correct = (pred_opts == grp["answer_gt"].str.strip().str.upper()).sum()
