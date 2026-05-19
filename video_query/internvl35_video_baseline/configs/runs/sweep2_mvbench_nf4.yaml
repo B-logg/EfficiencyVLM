@@ -1,0 +1,9 @@
+defaults:
+  - base
+  - dataset_mvbench
+
+sweep: 2
+target_fps: 5
+num_frames: 4
+embed_dir: outputs/embeddings/mvbench/5fps
+run_id_prefix: sweep2_mvbench_nf4
