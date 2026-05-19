@@ -124,7 +124,7 @@ def test_equivalence(model_path: str = "OpenGVLab/InternVL3_5-8B"):
     from transformers import AutoModel, AutoTokenizer
     model_full = AutoModel.from_pretrained(
         model_path,
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     ).to(device).eval()

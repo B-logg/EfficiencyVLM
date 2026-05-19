@@ -16,7 +16,7 @@ def load_internvit(model_path: str, device: str = "cuda") -> nn.Module:
     """전체 InternVL 모델 로드 (ViT + mlp1 + LLM 포함)."""
     model = AutoModel.from_pretrained(
         model_path,
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
     ).to(device).eval()
