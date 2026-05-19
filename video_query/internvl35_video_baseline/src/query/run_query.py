@@ -199,7 +199,6 @@ def main():
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
-        attn_implementation="sdpa",  # eager O(N²) 대신 memory-efficient SDPA 사용
     ).to(args.device).eval()
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
 
