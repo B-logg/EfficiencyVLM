@@ -212,7 +212,8 @@ def main():
     n_ok = n_skip = 0
     pbar = tqdm(entries, desc=f"Stage A [{args.dataset} {args.target_fps}fps]", unit="video", dynamic_ncols=True)
     for video_id, video_path in pbar:
-        output_path = os.path.join(args.output_dir, f"{video_id}.pt")
+        safe_id = video_id.replace("/", "_")
+        output_path = os.path.join(args.output_dir, f"{safe_id}.pt")
         if os.path.exists(output_path):
             logger.debug(f"[CACHE] {video_id} 이미 존재, skip")
             n_ok += 1
@@ -220,7 +221,7 @@ def main():
 
         result = ingest_video(
             video_path=video_path,
-            video_id=video_id,
+            video_id=safe_id,
             model=model,
             transform=transform,
             target_fps=args.target_fps,

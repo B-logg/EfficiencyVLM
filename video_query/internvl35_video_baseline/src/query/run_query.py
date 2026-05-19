@@ -68,7 +68,10 @@ def query_single(
     timing_logger: JsonlLogger,
 ) -> Dict[str, Any] | None:
     video_id = item["video_id"].replace("/", "_")
-    embed_path = os.path.join(embed_dir, f"{video_id}.pt")
+    # Stage A는 video_list.tsv의 video_id를 그대로 씀 (task prefix 없을 수 있음)
+    # → basename으로 fallback 조회
+    embed_fname = os.path.basename(item["video_id"])
+    embed_path = os.path.join(embed_dir, f"{embed_fname}.pt")
 
     if not os.path.exists(embed_path):
         logger.debug(f"[SKIP] embedding 없음: {embed_path}")
@@ -207,8 +210,8 @@ def main():
     qa_iter = iter_qa(args.dataset, args.data_root)
     warmup_items = []
     for item in qa_iter:
-        vid_id = item["video_id"].replace("/", "_")
-        if os.path.exists(os.path.join(args.embed_dir, f"{vid_id}.pt")):
+        embed_fname = os.path.basename(item["video_id"])
+        if os.path.exists(os.path.join(args.embed_dir, f"{embed_fname}.pt")):
             warmup_items.append(item)
         if len(warmup_items) >= WARMUP_ITERS:
             break
@@ -239,8 +242,8 @@ def main():
                 break
 
             # .pt 없으면 순회만 하고 max_samples 카운트 안 함
-            video_id = item["video_id"].replace("/", "_")
-            embed_path = os.path.join(args.embed_dir, f"{video_id}.pt")
+            embed_fname = os.path.basename(item["video_id"])
+            embed_path = os.path.join(args.embed_dir, f"{embed_fname}.pt")
             if not os.path.exists(embed_path):
                 continue
 
