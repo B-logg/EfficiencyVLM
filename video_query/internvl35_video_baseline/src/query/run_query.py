@@ -224,19 +224,28 @@ def main():
     logger.info(f"측정 시작 (run_id={run_id})")
     results = []
     n_ok = n_skip = n_na = n_oom = 0
-    total = args.max_samples or None
+    # max_samples = .pt 파일을 찾아서 실제 처리한 수 기준 (QA 순회 수 아님)
+    n_found = 0
 
     with open(response_path, "w") as resp_f:
         pbar = tqdm(
-            iter_qa(args.dataset, args.data_root),
+            total=args.max_samples,
             desc=f"Stage B [{args.dataset} nf={args.num_frames}]",
-            total=total,
-            unit="item",
+            unit="video",
             dynamic_ncols=True,
         )
-        for i, item in enumerate(pbar):
-            if args.max_samples and i >= args.max_samples:
+        for item in iter_qa(args.dataset, args.data_root):
+            if args.max_samples and n_found >= args.max_samples:
                 break
+
+            # .pt 없으면 순회만 하고 max_samples 카운트 안 함
+            video_id = item["video_id"].replace("/", "_")
+            embed_path = os.path.join(args.embed_dir, f"{video_id}.pt")
+            if not os.path.exists(embed_path):
+                continue
+
+            n_found += 1
+            pbar.update(1)
 
             result = query_single(
                 item=item, model_full=model_full, tokenizer=tokenizer,
