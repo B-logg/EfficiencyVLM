@@ -143,17 +143,23 @@ def make_table1(timings: pd.DataFrame, output_dir: str):
     rows = []
     for src, grp in sweep1.groupby("_source"):
         meta = parse_run_meta(src)
-        frame_rows = grp[grp.get("event", pd.Series()).isna()]
+        if "event" in grp.columns:
+            frame_rows = grp[grp["event"].isna()]
+            video_rows = grp[grp["event"].fillna("") == "video_done"]
+            dataset_done_grp = grp[grp["event"].fillna("") == "dataset_done"]
+        else:
+            frame_rows = grp
+            video_rows = grp.iloc[0:0]
+            dataset_done_grp = grp.iloc[0:0]
 
         t_vit = frame_rows["t_vit_forward_ms"].dropna().tolist()
         t_pre = frame_rows["t_preprocess_ms"].dropna().tolist()
         t_dec = frame_rows["t_decode_ms"].dropna().tolist()
 
-        video_rows = grp[grp.get("event", pd.Series()) == "video_done"]
-        n_late = video_rows["n_late_frames"].sum() if "n_late_frames" in video_rows else 0
+        n_late = video_rows["n_late_frames"].sum() if "n_late_frames" in video_rows.columns else 0
         fps_actual = None
         if "t_dataset_total_min" in grp.columns:
-            dataset_done = grp[grp.get("event", pd.Series()) == "dataset_done"]
+            dataset_done = dataset_done_grp
             if not dataset_done.empty:
                 total_min = dataset_done["t_dataset_total_min"].iloc[-1]
                 n_frames = len(frame_rows)
@@ -190,7 +196,7 @@ def make_table3(timings: pd.DataFrame, output_dir: str):
     rows = []
     for src, grp in sweep2.groupby("_source"):
         meta = parse_run_meta(src)
-        b_rows = grp[grp.get("stage", pd.Series()) == "B"]
+        b_rows = grp[grp["stage"].fillna("") == "B"] if "stage" in grp.columns else grp.iloc[0:0]
 
         t_query = b_rows["t_query_total_ms"].dropna().tolist()
         t_load = b_rows["t_load_pt_ms"].dropna().tolist()
@@ -305,10 +311,13 @@ def make_table5(embed_dir: str, output_dir: str):
 # ── Figure 1: target_fps vs fps_actual ────────────────────────────────────
 
 def make_figure1(timings: pd.DataFrame, output_dir: str):
-    sweep1_done = timings[
-        (timings.get("event", pd.Series()) == "dataset_done") &
-        timings["_source"].str.contains("sweep1", na=False)
-    ] if not timings.empty else pd.DataFrame()
+    if timings.empty or "event" not in timings.columns:
+        sweep1_done = pd.DataFrame()
+    else:
+        sweep1_done = timings[
+            (timings["event"].fillna("") == "dataset_done") &
+            timings["_source"].str.contains("sweep1", na=False)
+        ]
 
     if sweep1_done.empty:
         print("[Figure 1] No data")
@@ -319,17 +328,23 @@ def make_figure1(timings: pd.DataFrame, output_dir: str):
         sub = sweep1_done[sweep1_done["_source"].str.contains(dataset, na=False)]
         if sub.empty:
             continue
-        fps_list, actual_list = [], []
+        fps_map: Dict[int, float] = {}
         for _, row in sub.iterrows():
             meta = parse_run_meta(row["_source"])
-            if "target_fps" in meta and "t_dataset_total_min" in row:
-                n_frames = row.get("n_ok", 0) * meta["target_fps"] * 10
-                fps_actual = n_frames / (row["t_dataset_total_min"] * 60) if row["t_dataset_total_min"] > 0 else 0
-                fps_list.append(meta["target_fps"])
-                actual_list.append(fps_actual)
+            if "target_fps" not in meta:
+                continue
+            t_min = row.get("t_dataset_total_min")
+            if pd.isna(t_min) or t_min <= 0:
+                continue
+            n_ok = row.get("n_ok", 0) or 0
+            n_frames = n_ok * meta["target_fps"] * 10
+            fps_actual = n_frames / (t_min * 60)
+            fps_map[meta["target_fps"]] = fps_actual  # dedup: keep last (same fps → latest row)
 
-        if fps_list:
-            ax.plot(fps_list, actual_list, "o-", label=dataset)
+        if fps_map:
+            fps_sorted = sorted(fps_map.keys())
+            actual_sorted = [fps_map[f] for f in fps_sorted]
+            ax.plot(fps_sorted, actual_sorted, "o-", label=dataset)
 
     max_fps = 32
     ax.plot([0, max_fps], [0, max_fps], "--", color="gray", label="ideal")
@@ -513,13 +528,17 @@ def make_figure5(embed_dir: str, output_dir: str):
                 data[dataset][fps] = sizes
 
     fig, ax = plt.subplots(figsize=(6, 5))
-    for dataset, fps_dict in data.items():
+    # mvbench first (bottom), msrvtt second (top) so msrvtt is always visible when overlapping
+    for dataset in ["mvbench", "msrvtt"]:
+        if dataset not in data:
+            continue
+        fps_dict = data[dataset]
         fps_vals = sorted(fps_dict.keys())
         mb_means = [np.mean(fps_dict[f]) / 1e6 for f in fps_vals]
         if len(fps_vals) == 1:
-            ax.scatter(fps_vals, mb_means, label=dataset, zorder=3, s=80)
+            ax.scatter(fps_vals, mb_means, label=dataset, zorder=5, s=80)
         else:
-            ax.plot(fps_vals, mb_means, "o-", label=dataset)
+            ax.plot(fps_vals, mb_means, "o-", label=dataset, zorder=5)
 
     ax.set_xlabel("target_fps")
     ax.set_ylabel("MB/video (mean)")
