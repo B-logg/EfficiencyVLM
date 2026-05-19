@@ -85,7 +85,6 @@ def run_official_chat(model_full, tokenizer, frames: list, question: str, device
 
 def run_split_pipeline(model_full, tokenizer, frames: list, question: str, device: str):
     """embed_with_cache를 통해 logits와 generated_ids를 반환."""
-    from src.ingest.encoder import encode_frames
     from src.ingest.pixel_shuffle import pixel_shuffle as ps
 
     transform = build_video_transform(image_size=448)
