@@ -59,7 +59,6 @@ def embed_with_cache(
 
     try:
         prompt = build_prompt(question=question, num_frames=N, options=options)
-        # dummy pixel_values: shape만 맞추면 됨 (extract_feature에서 사용하지 않음)
         dummy_pv = torch.zeros(N, 3, 448, 448, device=device, dtype=torch.bfloat16)
 
         gen_config = dict(do_sample=False, max_new_tokens=max_new_tokens)

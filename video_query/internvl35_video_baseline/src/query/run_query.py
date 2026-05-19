@@ -97,16 +97,21 @@ def query_single(
     options = item.get("options", None)
 
     cuda_timer.start()
-    response = embed_with_cache(
-        model_full=model_full,
-        tokenizer=tokenizer,
-        embeddings=sub_emb,
-        question=question,
-        device=device,
-        options=options,
-        max_new_tokens=256,
-        num_frames=num_frames,
-    )
+    try:
+        response = embed_with_cache(
+            model_full=model_full,
+            tokenizer=tokenizer,
+            embeddings=sub_emb,
+            question=question,
+            device=device,
+            options=options,
+            max_new_tokens=256,
+            num_frames=num_frames,
+        )
+    except torch.cuda.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        logger.warning(f"[OOM] {video_id}: num_frames={num_frames} — GPU 메모리 부족, skip")
+        return {"video_id": video_id, "status": "skipped_oom", "reason": "CUDA OOM"}
     t_query = cuda_timer.stop()
 
     # 4. <frame>K</frame> 파싱
@@ -194,6 +199,7 @@ def main():
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
         low_cpu_mem_usage=True,
+        attn_implementation="sdpa",  # eager O(N²) 대신 memory-efficient SDPA 사용
     ).to(args.device).eval()
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
 
@@ -218,7 +224,7 @@ def main():
 
     logger.info(f"측정 시작 (run_id={run_id})")
     results = []
-    n_ok = n_skip = n_na = 0
+    n_ok = n_skip = n_na = n_oom = 0
     total = args.max_samples or None
 
     with open(response_path, "w") as resp_f:
@@ -242,24 +248,28 @@ def main():
 
             if result is None:
                 n_skip += 1
-                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na)
+                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na, oom=n_oom)
                 continue
             if result.get("status") == "skipped_F_lt_N":
                 n_na += 1
-                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na)
+                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na, oom=n_oom)
+                continue
+            if result.get("status") == "skipped_oom":
+                n_oom += 1
+                pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na, oom=n_oom)
                 continue
 
             n_ok += 1
-            pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na)
+            pbar.set_postfix(ok=n_ok, skip=n_skip, na=n_na, oom=n_oom)
             resp_f.write(json.dumps(result, ensure_ascii=False) + "\n")
 
     timing_logger.log({
         "run_id": run_id,
         "event": "query_done",
-        "n_ok": n_ok, "n_skip": n_skip, "n_na": n_na,
+        "n_ok": n_ok, "n_skip": n_skip, "n_na": n_na, "n_oom": n_oom,
     })
 
-    logger.info(f"완료: ok={n_ok}, skip={n_skip}, n/a(F<N)={n_na}")
+    logger.info(f"완료: ok={n_ok}, skip={n_skip}, n/a(F<N)={n_na}, oom={n_oom}")
     logger.info(f"응답 저장: {response_path}")
 
 
