@@ -73,7 +73,7 @@ except RuntimeError as e:
         --data_root "$data_root" \
         --model_path "$MODEL_PATH" \
         --device "$DEVICE" \
-        --max_samples 200
+        --max_samples 100
 
     echo "--- 완료: ${dataset} nf=${num_frames} ---"
 }

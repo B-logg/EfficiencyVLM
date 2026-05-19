@@ -58,7 +58,7 @@ run_stage_a() {
         --video_list "$video_list" \
         --model_path "$MODEL_PATH" \
         --device "$DEVICE" \
-        --max_videos 200 \
+        --max_videos 100 \
         $lock_flag
 
     echo "--- 완료: ${dataset} fps=${target_fps} ---"
@@ -105,7 +105,7 @@ for bsz in 1 4 8; do
         --video_list "${MSRVTT_ROOT}/video_list.tsv" \
         --model_path "$MODEL_PATH" \
         --device "$DEVICE" \
-        --max_videos 200 \
+        --max_videos 100 \
         --run_id "throughput_msrvtt_fps5_bsz${bsz}" || true
 done
 

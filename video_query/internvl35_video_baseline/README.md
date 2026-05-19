@@ -8,7 +8,7 @@ InternVL3.5-8B를 이용해 비디오 이해 파이프라인의 **FPS / num_fram
 - **데이터셋**: MSRVTT-QA test split + MVBench (20개 sub-task)
 - **절단점**: ViT → **Pixel Shuffle 직후** (프레임당 256 토큰) → `.pt` 캐시
 - **GPU 타이밍**: `torch.cuda.Event` 전용 (CPU 타이머 사용 금지)
-- **디버그 모드**: 모든 sweep 조건당 200개 영상 제한 (`--max_videos` / `--max_samples`)
+- **디버그 모드**: 모든 sweep 조건당 100개 영상 제한 (`--max_videos` / `--max_samples`)
 
 ---
 
@@ -41,10 +41,10 @@ embed_with_cache():
 
 | Sweep | 변수 | 값 | 고정 값 | 영상 수 (조건당) |
 |-------|------|-----|---------|----------------|
-| 1 (Stage A) | `target_fps` | 1, 2, 5, 10, 30 | `num_frames=8` | 200 |
-| 2 (Stage B) | `num_frames` | 8, 16, 32 | `target_fps=5` | 200 |
+| 1 (Stage A) | `target_fps` | 1, 2, 5, 10, 30 | `num_frames=8` | 100 |
+| 2 (Stage B) | `num_frames` | 8, 16, 32 | `target_fps=5` | 100 |
 
-각 조건은 독립 프로세스로 실행되므로 조건마다 200개씩 처리.
+각 조건은 독립 프로세스로 실행되므로 조건마다 100개씩 처리.
 
 ---
 
@@ -122,10 +122,10 @@ export MVBENCH_ROOT="data/mvbench"
 # 2. Gate 테스트 (반드시 통과 확인 후 실험 진행)
 pytest tests/ -v
 
-# 3. Sweep 1: Stage A FPS sweep (조건당 200개, tqdm 진행바 표시)
+# 3. Sweep 1: Stage A FPS sweep (조건당 100개, tqdm 진행바 표시)
 bash scripts/03_run_sweep1.sh
 
-# 4. Sweep 2: Stage B num_frames sweep (조건당 200개, tqdm 진행바 표시)
+# 4. Sweep 2: Stage B num_frames sweep (조건당 100개, tqdm 진행바 표시)
 bash scripts/04_run_sweep2.sh
 
 # 5. 결과 집계 및 시각화
@@ -145,8 +145,8 @@ LOCK_CLOCKS=1 bash scripts/03_run_sweep1.sh
 실행 중 터미널에 아래와 같이 표시된다:
 
 ```
-Stage A [msrvtt 5fps]:  45%|████████████       | 90/200 [02:13<02:41,  0.68video/s, ok=88, skip=2]
-Stage B [mvbench nf=16]: 30%|██████             | 60/200 [05:22<12:10,  0.19item/s, ok=57, skip=2, na=1]
+Stage A [msrvtt 5fps]:  45%|████████████       | 90/100 [02:13<02:41,  0.68video/s, ok=88, skip=2]
+Stage B [mvbench nf=16]: 30%|██████             | 60/100 [05:22<12:10,  0.19item/s, ok=57, skip=2, na=1]
 ```
 
 - `ok`: 정상 처리 수
@@ -211,4 +211,4 @@ outputs/
 - "실시간" 시뮬레이션은 파일 기반 (RTSP / 네트워크 jitter 미포함)
 - MVBench × 30fps: context overflow 시 N/A
 - GPU 절대 latency 수치는 A100/H100 80GB 기준
-- 현재 `--max_videos 200` / `--max_samples 200` 제한 적용 중 (흐름 검증 후 제거)
+- 현재 `--max_videos 100` / `--max_samples 100` 제한 적용 중 (흐름 검증 후 제거)
