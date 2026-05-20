@@ -49,10 +49,10 @@ from src.utils.seed import set_seed
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-TARGET_FPS    = 10
-CLIP_DURATION = 10      # seconds → 100 frames
-N_FRAMES      = TARGET_FPS * CLIP_DURATION   # 100
-MAX_SAFE_FRAMES = (32768 - 512 - 256) // 256  # = 125  (32k context 내 최대)
+TARGET_FPS    = 12
+CLIP_DURATION = 10      # seconds → 120 frames
+N_FRAMES      = TARGET_FPS * CLIP_DURATION   # 120
+MAX_SAFE_FRAMES = (40960 - 512 - 256) // 256  # = 156  (40960 실측 context 기준)
 
 
 def iter_qa(dataset: str, data_root: str) -> Iterator[Dict[str, Any]]:
@@ -87,7 +87,8 @@ def stage_a_encode(
     from PIL import Image
 
     safe_id  = video_id.replace("/", "_")
-    pt_path  = os.path.join(embed_dir, f"{safe_id}.pt")
+    # FPS를 파일명에 포함 → FPS 변경 시 자동으로 새 파일 생성 (stale cache 방지)
+    pt_path  = os.path.join(embed_dir, f"{safe_id}_fps{TARGET_FPS}.pt")
 
     # 이미 처리된 파일은 스킵 (Stage A 재시작 지원)
     if os.path.exists(pt_path):
@@ -187,7 +188,7 @@ def stage_b_query(
     """
     video_id = item["video_id"]
     safe_id  = video_id.replace("/", "_")
-    pt_path  = os.path.join(embed_dir, f"{safe_id}.pt")
+    pt_path  = os.path.join(embed_dir, f"{safe_id}_fps{TARGET_FPS}.pt")
 
     if not os.path.exists(pt_path):
         logger.debug(f"[SKIP B] .pt 없음: {pt_path}")

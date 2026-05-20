@@ -46,13 +46,13 @@ from src.utils.seed import set_seed
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-TARGET_FPS     = 10
-CLIP_DURATION  = 10   # seconds → 100 frames
-N_TOTAL_FRAMES = TARGET_FPS * CLIP_DURATION   # 100
+TARGET_FPS     = 12
+CLIP_DURATION  = 10   # seconds → 120 frames
+N_TOTAL_FRAMES = TARGET_FPS * CLIP_DURATION   # 120
 
-# InternVL3.5-8B: 32768 토큰 컨텍스트
-# 100프레임 × 256 + prompt(512) + gen(256) = 26368 < 32768 → 전부 입력 가능
-MAX_SAFE_FRAMES = (32768 - 512 - 256) // 256  # = 125
+# InternVL3.5-8B: 40960 토큰 컨텍스트 (실측값)
+# 100프레임 × 256 + prompt(512) + gen(256) = 26368 < 40960 → 전부 입력 가능
+MAX_SAFE_FRAMES = (40960 - 512 - 256) // 256  # = 156
 
 
 def iter_qa(dataset: str, data_root: str) -> Iterator[Dict[str, Any]]:
@@ -255,7 +255,7 @@ def main():
         if not item.get("video_path") or not os.path.exists(item["video_path"]):
             continue
         e2e_query_single(item, model, tokenizer, transform,
-                         args.num_frames_llm, args.device)
+                         num_frames_llm, args.device)
         warmup_done += 1
 
     # ── Main measurement loop ───────────────────────────────────────────
@@ -268,7 +268,7 @@ def main():
     with open(out_path, "w") as f_out:
         pbar = tqdm(
             total=args.max_samples,
-            desc=f"E2E [{args.dataset} fps={TARGET_FPS} nf_llm={args.num_frames_llm}]",
+            desc=f"E2E [{args.dataset} fps={TARGET_FPS} nf_llm={num_frames_llm}]",
             unit="video",
         )
         for item in iter_qa(args.dataset, args.data_root):

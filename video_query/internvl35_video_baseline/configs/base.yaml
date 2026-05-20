@@ -13,7 +13,7 @@ vit:
 llm:
   do_sample: false
   max_new_tokens: 256
-  max_context: 32768
+  max_context: 40960  # 실측값 (max_position_embeddings)
 
 seed: 42
 device: cuda

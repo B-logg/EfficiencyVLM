@@ -9,7 +9,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # InternVL3.5-8B의 LLM context 길이
-INTERNVL35_MAX_CONTEXT = 32768
+INTERNVL35_MAX_CONTEXT = 40960  # 실측값 (max_position_embeddings)
 # <image> 토큰 1개 = 256 visual tokens (pixel_shuffle 후)
 VISUAL_TOKENS_PER_FRAME = 256
 # 프롬프트 오버헤드 추정치 (system prompt + question + 지시문)
