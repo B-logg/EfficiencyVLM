@@ -20,12 +20,12 @@ import os
 
 # (x-label, e2e_col, cached_col or None)
 STAGES = [
-    ("Text",                "1a_text",  "1a_text"),
-    ("Img Preproc",         "1b_img",   "1b_img"),
-    ("ViT",                 "2a_vit",   "2a_vit"),
-    ("Merger / DB Load",    "2b_mlp",   "2b_mlp"),
-    ("Fusion",              "3_fusion", "3_fusion"),
-    ("Gen (TTFT)",          "4_gen",    "4_gen"),
+    ("Text",            "1a_text",  "1a_text"),
+    ("Img Preproc",     "1b_img",   "1b_img"),
+    ("ViT / DB Load",   "2a_vit",   "2b_mlp"),   # Cached: 2b_mlp = DB Load, goes to ViT slot
+    ("Merger",          "2b_mlp",   None),        # Cached: 0 (merger already cached)
+    ("Fusion",          "3_fusion", "3_fusion"),
+    ("Gen (TTFT)",      "4_gen",    "4_gen"),
 ]
 INF_METRICS = ["true_ttft", "decode_time", "total_latency"]
 INF_LABELS  = ["True TTFT", "Decode Time", "Total Latency"]
