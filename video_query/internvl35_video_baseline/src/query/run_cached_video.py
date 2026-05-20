@@ -66,6 +66,40 @@ def iter_qa(dataset: str, data_root: str) -> Iterator[Dict[str, Any]]:
         raise ValueError(f"Unknown dataset: {dataset}")
 
 
+def collect_sorted_by_duration(
+    dataset: str,
+    data_root: str,
+    min_duration: float = CLIP_DURATION,
+    max_samples: int = 200,
+) -> List[Dict[str, Any]]:
+    """
+    전체 QA 아이템을 스캔해서:
+      1) duration >= min_duration 인 것만 수집
+      2) duration 오름차순 정렬 (10초에 가장 가까운 영상 우선)
+      3) 상위 max_samples개 반환
+    """
+    import decord
+
+    logger.info(f"영상 길이 스캔 중 (>= {min_duration}s)...")
+    candidates = []
+    for item in iter_qa(dataset, data_root):
+        vp = item.get("video_path", "")
+        if not vp or not os.path.exists(vp):
+            continue
+        try:
+            vr = decord.VideoReader(vp, ctx=decord.cpu(0))
+            duration = len(vr) / vr.get_avg_fps()
+            if duration >= min_duration:
+                item["_duration"] = duration
+                candidates.append(item)
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda x: x["_duration"])
+    logger.info(f"유효 샘플: {len(candidates)}개 (>= {min_duration}s) → 상위 {min(max_samples, len(candidates))}개 사용")
+    return candidates[:max_samples]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage A: 비디오 인코딩 (1회 처리)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,25 +341,25 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     transform = build_video_transform(image_size=448)
 
-    # ── QA 샘플 수집 ─────────────────────────────────────────────────────
-    logger.info(f"QA 샘플 수집 중 (max={args.max_samples})...")
-    qa_items: List[Dict[str, Any]] = []
-    for item in iter_qa(args.dataset, args.data_root):
-        if len(qa_items) >= args.max_samples:
-            break
-        vp = item.get("video_path", "")
-        if not vp or not os.path.exists(vp):
-            continue
-        qa_items.append(item)
+    # ── QA 샘플 수집: duration >= 10s, 오름차순 정렬 ───────────────────
+    total_needed = args.max_samples + args.warmup_samples
+    qa_items: List[Dict[str, Any]] = collect_sorted_by_duration(
+        args.dataset, args.data_root,
+        min_duration=CLIP_DURATION,
+        max_samples=total_needed,
+    )
+    if len(qa_items) < total_needed:
+        logger.warning(f"유효 샘플 부족: {len(qa_items)} < {total_needed}")
     logger.info(f"QA 샘플: {len(qa_items)}개 (unique 비디오: {len(set(it['video_path'] for it in qa_items))}개)")
 
-    # ── Warmup ──────────────────────────────────────────────────────────
-    logger.info(f"Warmup {args.warmup_samples}회 (Stage B)...")
-    for item in qa_items[:args.warmup_samples]:
-        # Stage A (warmup용)
+    # ── Warmup (앞쪽 warmup_samples개 사용) ────────────────────────────
+    warmup_items  = qa_items[:args.warmup_samples]
+    measure_items = qa_items[args.warmup_samples:args.warmup_samples + args.max_samples]
+
+    logger.info(f"Warmup {len(warmup_items)}회 (Stage B)...")
+    for item in warmup_items:
         stage_a_encode(item["video_path"], item["video_id"],
                        model, transform, args.embed_dir, args.device)
-        # Stage B (warmup용)
         stage_b_query(item, model, tokenizer, args.embed_dir,
                       num_frames_llm, args.device)
 
@@ -335,8 +369,8 @@ def main():
     stage_a_results: List[Dict] = []
 
     logger.info("Stage A: 비디오 인코딩 시작...")
-    pbar_a = tqdm(total=len(qa_items), desc=f"Stage A [{args.dataset}]", unit="video")
-    for item in qa_items:
+    pbar_a = tqdm(total=len(measure_items), desc=f"Stage A [{args.dataset}]", unit="video")
+    for item in measure_items:
         vid = item["video_id"]
         if vid in seen_videos:
             pbar_a.update(1)
@@ -369,8 +403,8 @@ def main():
 
     b_jsonl_path = os.path.join(args.output_dir, f"{run_id}.jsonl")
     with open(b_jsonl_path, "w") as jf:
-        pbar_b = tqdm(total=len(qa_items), desc=f"Stage B [{args.dataset}]", unit="query")
-        for item in qa_items:
+        pbar_b = tqdm(total=len(measure_items), desc=f"Stage B [{args.dataset}]", unit="query")
+        for item in measure_items:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
 

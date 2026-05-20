@@ -73,6 +73,40 @@ def uniform_subsample_indices(total: int, n: int) -> List[int]:
     return [round(i * (total - 1) / (n - 1)) for i in range(n)]
 
 
+def collect_sorted_by_duration(
+    dataset: str,
+    data_root: str,
+    min_duration: float = CLIP_DURATION,
+    max_samples: int = 200,
+) -> List[Dict[str, Any]]:
+    """
+    전체 QA 아이템을 스캔해서:
+      1) 영상 파일 존재 + duration >= min_duration 인 것만 수집
+      2) duration 오름차순 정렬 (10초에 가장 가까운 영상 우선)
+      3) 상위 max_samples개 반환
+    """
+    import decord
+
+    logger.info(f"영상 길이 스캔 중 (>= {min_duration}s)...")
+    candidates = []
+    for item in iter_qa(dataset, data_root):
+        vp = item.get("video_path", "")
+        if not vp or not os.path.exists(vp):
+            continue
+        try:
+            vr = decord.VideoReader(vp, ctx=decord.cpu(0))
+            duration = len(vr) / vr.get_avg_fps()
+            if duration >= min_duration:
+                item["_duration"] = duration
+                candidates.append(item)
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda x: x["_duration"])
+    logger.info(f"유효 샘플: {len(candidates)}개 (>= {min_duration}s) → 상위 {min(max_samples, len(candidates))}개 사용")
+    return candidates[:max_samples]
+
+
 @torch.no_grad()
 def e2e_query_single(
     item: Dict[str, Any],
@@ -246,17 +280,22 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     transform = build_video_transform(image_size=448)
 
+    # ── QA 샘플 수집: duration >= 10s, 오름차순 정렬 ───────────────────
+    # warmup + 측정 합산 개수만큼 미리 수집
+    total_needed = args.max_samples + args.warmup_samples
+    qa_items = collect_sorted_by_duration(
+        args.dataset, args.data_root,
+        min_duration=CLIP_DURATION,
+        max_samples=total_needed,
+    )
+    if len(qa_items) < total_needed:
+        logger.warning(f"유효 샘플 부족: {len(qa_items)} < {total_needed} (warmup={args.warmup_samples})")
+
     # ── Warmup ─────────────────────────────────────────────────────────
     logger.info(f"Warmup {args.warmup_samples} 샘플...")
-    warmup_done = 0
-    for item in iter_qa(args.dataset, args.data_root):
-        if warmup_done >= args.warmup_samples:
-            break
-        if not item.get("video_path") or not os.path.exists(item["video_path"]):
-            continue
+    for item in qa_items[:args.warmup_samples]:
         e2e_query_single(item, model, tokenizer, transform,
                          num_frames_llm, args.device)
-        warmup_done += 1
 
     # ── Main measurement loop ───────────────────────────────────────────
     logger.info(f"측정 시작 (run_id={run_id}, max_samples={args.max_samples})")
@@ -271,12 +310,7 @@ def main():
             desc=f"E2E [{args.dataset} fps={TARGET_FPS} nf_llm={num_frames_llm}]",
             unit="video",
         )
-        for item in iter_qa(args.dataset, args.data_root):
-            if n_found >= args.max_samples:
-                break
-            if not item.get("video_path") or not os.path.exists(item["video_path"]):
-                continue
-
+        for item in qa_items[args.warmup_samples:args.warmup_samples + args.max_samples]:
             n_found += 1
             pbar.update(1)
 
