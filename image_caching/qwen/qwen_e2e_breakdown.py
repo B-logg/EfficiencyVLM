@@ -53,31 +53,33 @@ with torch.no_grad():
             torch.cuda.synchronize()  # H2D 전송 완료 대기
             t_prep_ms = (time.perf_counter() - _t) * 1000
 
-            # 2. ViT + Merger: forward hook으로 경계 시점 분리 → 각각 CUDA Event
+            # 2. ViT + Merger: vision_encoder는 ViT만 실행, Merger 명시적 별도 호출
             ev_vit_start    = torch.cuda.Event(enable_timing=True)
             ev_merger_start = torch.cuda.Event(enable_timing=True)
             ev_enc_end      = torch.cuda.Event(enable_timing=True)
 
-            def _merger_pre_hook(module, input):
-                ev_merger_start.record()
-
             merger = getattr(vision_encoder, 'merger', None)
-            hook = merger.register_forward_pre_hook(_merger_pre_hook) if merger else None
+            lm_dim = model.get_input_embeddings().weight.shape[1]
 
             ev_vit_start.record()
             v_out = vision_encoder(p_val, grid_thw=g_thw)
-            img_embs = v_out.last_hidden_state if hasattr(v_out, 'last_hidden_state') else (v_out[0] if isinstance(v_out, tuple) else v_out)
-            ev_enc_end.record()
+            if hasattr(v_out, 'last_hidden_state'):
+                v_out = v_out.last_hidden_state
+            elif isinstance(v_out, tuple):
+                v_out = v_out[0]
+            ev_merger_start.record()
 
-            if hook: hook.remove()
+            if merger is not None and v_out.shape[-1] != lm_dim:
+                img_embs = merger(v_out)
+                merger_ran = True
+            else:
+                img_embs = v_out
+                merger_ran = False
+            ev_enc_end.record()
             torch.cuda.synchronize()
 
-            if merger:
-                t_vit_ms    = ev_vit_start.elapsed_time(ev_merger_start)  # ms, ViT만
-                t_merger_ms = ev_merger_start.elapsed_time(ev_enc_end)    # ms, Merger만
-            else:
-                t_vit_ms    = ev_vit_start.elapsed_time(ev_enc_end)
-                t_merger_ms = 0.0
+            t_vit_ms    = ev_vit_start.elapsed_time(ev_merger_start)
+            t_merger_ms = ev_merger_start.elapsed_time(ev_enc_end) if merger_ran else 0.0
 
             N_patches = img_embs.shape[0]
 
