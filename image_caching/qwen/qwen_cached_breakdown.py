@@ -15,8 +15,8 @@ RESOLUTIONS = {
     "1792x1792": (1792, 1792),
     "2520x2520": (2520, 2520),
 }
-WARMUP_ITER = 30
-NUM_ITER = WARMUP_ITER + 500
+WARMUP_ITER = 50
+NUM_ITER = WARMUP_ITER + 300
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -34,33 +34,43 @@ with torch.no_grad():
     for label, size in RESOLUTIONS.items():
         print(f"\nTesting Qwen Cached Breakdown - Resolution: {label}")
 
-        # 사전 작업: 랜덤 이미지로 visual encoder 실행 후 .pt 저장 (타이밍 루프 밖)
+        # 사전 작업: 랜덤 이미지로 ViT 실행 후 .pt 저장 (merger는 쿼리 시점에 실행)
         dummy_array = np.random.randint(0, 256, (size[1], size[0], 3), dtype=np.uint8)
         dummy_image = Image.fromarray(dummy_array)
         img_in = processor.image_processor(images=dummy_image, return_tensors="pt").to(device)
         v_out = vision_encoder(img_in.pixel_values.to(torch.bfloat16), grid_thw=img_in.image_grid_thw)
-        img_embs_pre = v_out.last_hidden_state if hasattr(v_out, 'last_hidden_state') else (v_out[0] if isinstance(v_out, tuple) else v_out)
+        vit_pre = v_out.last_hidden_state if hasattr(v_out, 'last_hidden_state') else (v_out[0] if isinstance(v_out, tuple) else v_out)
         merger = getattr(vision_encoder, 'merger', None)
-        if merger and img_embs_pre.shape[-1] != model.get_input_embeddings().weight.shape[1]:
-            img_embs_pre = merger(img_embs_pre)
-        torch.save({"embeds": img_embs_pre.cpu(), "grid_thw": img_in.image_grid_thw.cpu()}, f"temp_qwen_{label}.pt")
+        lm_dim = model.get_input_embeddings().weight.shape[1]
+        torch.save({"embeds": vit_pre.cpu(), "grid_thw": img_in.image_grid_thw.cpu()}, f"temp_qwen_{label}.pt")
         torch.cuda.synchronize()
 
-        avg_db, avg_fus, avg_pref, measure_count = 0.0, 0.0, 0.0, 0
+        avg_db, avg_merger, avg_fus, avg_pref, measure_count = 0.0, 0.0, 0.0, 0.0, 0
 
         for i in tqdm(range(NUM_ITER)):
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
 
-            # 1. DB Load: CPU(disk I/O) + H2D → wall clock
+            # 1. DB Load: CPU(disk I/O) + H2D → wall clock (ViT features)
             _t = time.perf_counter()
             saved = torch.load(f"temp_qwen_{label}.pt")
-            embs = saved["embeds"].to(device, torch.bfloat16)
+            vit_features = saved["embeds"].to(device, torch.bfloat16)
             g_thw = saved["grid_thw"].to(device)
-            N_patches = embs.shape[0]
             torch.cuda.synchronize()  # H2D 전송 완료 대기
             t_db_ms = (time.perf_counter() - _t) * 1000
+
+            # 1b. Merger: pure GPU → CUDA Event
+            ev_ms, ev_me = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            ev_ms.record()
+            if merger is not None and vit_features.shape[-1] != lm_dim:
+                embs = merger(vit_features)
+            else:
+                embs = vit_features
+            ev_me.record()
+            torch.cuda.synchronize()
+            t_merger_ms = ev_ms.elapsed_time(ev_me)
+            N_patches = embs.shape[0]
 
             # 2. Text tokenization + Fusion: CPU(string 구성+tokenize) + GPU(embedding+교체) → wall clock
             # Qwen2-VL: N_patches 기반 프롬프트 구성이 CPU, in-place 교체가 GPU
@@ -84,16 +94,17 @@ with torch.no_grad():
             t_pref_ms = (time.perf_counter() - _t) * 1000
 
             if i >= WARMUP_ITER:
-                avg_db   += t_db_ms
-                avg_fus  += t_fus_ms
-                avg_pref += t_pref_ms
+                avg_db     += t_db_ms
+                avg_merger += t_merger_ms
+                avg_fus    += t_fus_ms
+                avg_pref   += t_pref_ms
                 measure_count += 1
 
         results.append({
             "Resolution": label,
             "Image Preprocessing": 0.0,
             "DB Load": avg_db / measure_count,
-            "Fusion (Text+Visual)": avg_fus / measure_count,
+            "Merger": avg_merger / measure_count,
             "LLM Prefill (TTFT)": avg_pref / measure_count,
         })
 

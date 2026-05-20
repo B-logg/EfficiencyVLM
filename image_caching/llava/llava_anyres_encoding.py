@@ -7,7 +7,7 @@ from datasets import load_dataset
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 SAVE_DIR = "./llava_vision_embeddings"
-NUM_TEST_SAMPLES = 3100
+NUM_TEST_SAMPLES = 1050
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -33,6 +33,6 @@ with torch.no_grad():
         multi_modal_projector = getattr(model, 'multi_modal_projector', getattr(getattr(model, 'model', None), 'multi_modal_projector', None))
         
         image_outputs = vision_tower(pixel_values, output_hidden_states=True)
-        image_features = multi_modal_projector(image_outputs.hidden_states[-2])
-        
-        torch.save(image_features.cpu(), f"{SAVE_DIR}/embed_{image_id}.pt")
+        vit_features = image_outputs.hidden_states[-2]  # projector runs at query time
+
+        torch.save(vit_features.cpu(), f"{SAVE_DIR}/embed_{image_id}.pt")

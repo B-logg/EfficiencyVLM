@@ -7,7 +7,7 @@ from datasets import load_dataset
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 SAVE_DIR = "./qwen_vision_embeddings"
-NUM_TEST_SAMPLES = 3100
+NUM_TEST_SAMPLES = 1050
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -35,8 +35,5 @@ with torch.no_grad():
         else:
             image_embeds = vision_outputs
             
-        merger = getattr(vision_encoder, 'merger', None)
-        if merger is not None and image_embeds.shape[-1] != model.get_input_embeddings().weight.shape[1]:
-            image_embeds = merger(image_embeds)
-            
+        # Save ViT output only (merger runs at query time)
         torch.save({"embeds": image_embeds.cpu(), "grid_thw": grid_thw.cpu()}, f"{SAVE_DIR}/embed_{image_id}.pt")

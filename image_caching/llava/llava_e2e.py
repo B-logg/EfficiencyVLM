@@ -5,8 +5,8 @@ from transformers import LlavaNextForConditionalGeneration, LlavaNextProcessor, 
 from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
-NUM_TEST_SAMPLES = 3100
-WARMUP_SAMPLES = 30
+NUM_TEST_SAMPLES = 1050
+WARMUP_SAMPLES = 50
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class CUDATimer:

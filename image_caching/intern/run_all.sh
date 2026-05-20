@@ -20,9 +20,9 @@ run() {
 }
 
 run intern_anyres_encoding.py
+run intern_e2e_breakdown.py
 run intern_cached_breakdown.py
 run intern_cached.py
-run intern_e2e_breakdown.py
 run intern_e2e.py
 
 echo ""

@@ -20,9 +20,9 @@ run() {
 }
 
 run llava_anyres_encoding.py
+run llava_e2e_breakdown.py
 run llava_cached_breakdown.py
 run llava_cached.py
-run llava_e2e_breakdown.py
 run llava_e2e.py
 
 echo ""

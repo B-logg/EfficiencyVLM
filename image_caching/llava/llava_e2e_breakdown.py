@@ -15,8 +15,8 @@ RESOLUTIONS = {
     "1792x1792": (1792, 1792),
     "2520x2520": (2520, 2520),
 }
-WARMUP_ITER = 30
-NUM_ITER = WARMUP_ITER + 500
+WARMUP_ITER = 50
+NUM_ITER = WARMUP_ITER + 300
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -47,7 +47,7 @@ with torch.no_grad():
         dummy_array = np.random.randint(0, 256, (size[1], size[0], 3), dtype=np.uint8)
         dummy_image = Image.fromarray(dummy_array)
 
-        avg_prep, avg_enc, avg_fus, avg_pref, measure_count = 0.0, 0.0, 0.0, 0.0, 0
+        avg_prep, avg_vit, avg_proj, avg_fus, avg_pref, measure_count = 0.0, 0.0, 0.0, 0.0, 0.0, 0
         crash_flag = False
 
         for i in tqdm(range(NUM_ITER)):
@@ -66,16 +66,23 @@ with torch.no_grad():
             torch.cuda.synchronize()  # H2D 전송 완료 대기
             t_prep_ms = (time.perf_counter() - _t) * 1000
 
-            # 2. Image Encoding: ViT + Projector → pure GPU, CUDA Event
-            t_enc = CUDATimer(); t_enc.start()
+            # 2a. ViT: pure GPU → CUDA Event
+            ev_vs, ev_ve = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            ev_vs.record()
             v_out = vision_tower(pixel_values, output_hidden_states=True)
+            ev_ve.record()
+
+            # 2b. Projector: pure GPU → CUDA Event
+            ev_ps, ev_pe = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            ev_ps.record()
             img_embs = projector(v_out.hidden_states[-2])
             if img_embs.dim() == 4: img_embs = img_embs.flatten(1, 2)
             if img_embs.dim() == 3 and img_embs.shape[0] != 1:
                 img_embs = img_embs.view(1, -1, img_embs.shape[-1])
-            t_enc.stop()
+            ev_pe.record()
             torch.cuda.synchronize()
-            t_enc_ms = t_enc.get_time() * 1000
+            t_vit_ms  = ev_vs.elapsed_time(ev_ve)
+            t_proj_ms = ev_ps.elapsed_time(ev_pe)
 
             # 3. Fusion + Prefill
             try:
@@ -108,19 +115,20 @@ with torch.no_grad():
 
                 if i >= WARMUP_ITER:
                     avg_prep += t_prep_ms
-                    avg_enc  += t_enc_ms
+                    avg_vit  += t_vit_ms
+                    avg_proj += t_proj_ms
                     avg_fus  += t_fus_ms
                     avg_pref += t_pref_ms
                     measure_count += 1
             except Exception as e:
                 print(f"Crash Details: {e}")
-                avg_prep, avg_enc, avg_fus, avg_pref, measure_count, crash_flag = 0, 0, 0, 0, 1, True; break
+                avg_prep, avg_vit, avg_proj, avg_fus, avg_pref, measure_count, crash_flag = 0, 0, 0, 0, 0, 1, True; break
 
         results.append({
             "Resolution": label,
             "Image Preprocessing": avg_prep / measure_count,
-            "Image Encoding": avg_enc / measure_count,
-            "Fusion": avg_fus / measure_count,
+            "ViT": avg_vit  / measure_count,
+            "Projector": avg_proj / measure_count,
             "LLM Prefill (TTFT)": avg_pref / measure_count,
         })
 

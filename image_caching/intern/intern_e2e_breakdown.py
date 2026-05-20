@@ -19,8 +19,8 @@ RESOLUTIONS = {
     "4K (Tokens)": (4, 4),
     "8K (Tokens)": (4, 8)
 }
-WARMUP_ITER = 30
-NUM_ITER = WARMUP_ITER + 500
+WARMUP_ITER = 50
+NUM_ITER = WARMUP_ITER + 300
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -49,7 +49,7 @@ with torch.no_grad():
         dummy_array = np.random.randint(0, 256, (448, 448, 3), dtype=np.uint8)
         dummy_image = Image.fromarray(dummy_array)
 
-        avg_prep, avg_enc, avg_pref, measure_count = 0.0, 0.0, 0.0, 0
+        avg_prep, avg_vit, avg_shuffle, avg_mlp, avg_pref, measure_count = 0.0, 0.0, 0.0, 0.0, 0.0, 0
         crash_flag = False
 
         for i in tqdm(range(NUM_ITER)):
@@ -65,9 +65,15 @@ with torch.no_grad():
             torch.cuda.synchronize()  # H2D 전송 완료 대기
             t_prep_ms = (time.perf_counter() - _t) * 1000
 
-            # 2. Encoding: ViT + Unshuffle + MLP → pure GPU, CUDA Event
-            t_enc = CUDATimer(); t_enc.start()
+            # 2a. ViT: pure GPU → CUDA Event
+            ev_vs, ev_ve = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            ev_vs.record()
             vit = model.vision_model(pixel_values).last_hidden_state[:, 1:, :]
+            ev_ve.record()
+
+            # 2b. Pixel Shuffle: pure GPU → CUDA Event
+            ev_ss, ev_se = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            ev_ss.record()
             b, s, c = vit.shape
             vit = (vit
                 .reshape(b, int(s**0.5), int(s**0.5), c)
@@ -75,11 +81,18 @@ with torch.no_grad():
                 .reshape(b, int(s**0.5)//2, int(s**0.5)//2, 4, c)
                 .reshape(b, int(s**0.5)//2, int(s**0.5)//2, c*4)
                 .reshape(b, -1, c*4))
+            ev_se.record()
+
+            # 2c. MLP1 (Projector): pure GPU → CUDA Event
+            ev_ms, ev_me = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            ev_ms.record()
             img_embs = model.mlp1(vit)
             img_embs = img_embs.reshape(-1, img_embs.shape[-1])
-            t_enc.stop()
-            torch.cuda.synchronize()  # prefill 전에 인코딩 완료 보장
-            t_enc_ms = t_enc.get_time() * 1000
+            ev_me.record()
+            torch.cuda.synchronize()
+            t_vit_ms     = ev_vs.elapsed_time(ev_ve)
+            t_shuffle_ms = ev_ss.elapsed_time(ev_se)
+            t_mlp_ms     = ev_ms.elapsed_time(ev_me)
 
             # 3. Prefill: tokenizer(CPU) + embed + assemble + 첫 토큰까지 → wall clock
             # max_new_tokens=1로 정확히 TTFT만 측정, _t를 tokenizer 앞에 설정
@@ -110,19 +123,23 @@ with torch.no_grad():
                 t_pref_ms = (time.perf_counter() - _t) * 1000
 
                 if i >= WARMUP_ITER:
-                    avg_prep += t_prep_ms
-                    avg_enc += t_enc_ms
-                    avg_pref += t_pref_ms
+                    avg_prep    += t_prep_ms
+                    avg_vit     += t_vit_ms
+                    avg_shuffle += t_shuffle_ms
+                    avg_mlp     += t_mlp_ms
+                    avg_pref    += t_pref_ms
                     measure_count += 1
             except Exception as e:
                 print(f"Crash Details: {e}")
-                avg_prep, avg_enc, avg_pref, measure_count, crash_flag = 0, 0, 0, 1, True; break
+                avg_prep, avg_vit, avg_shuffle, avg_mlp, avg_pref, measure_count, crash_flag = 0, 0, 0, 0, 0, 1, True; break
 
         results.append({
             "Resolution": label,
-            "Image Preprocessing": avg_prep / measure_count,
-            "Image Encoding": avg_enc / measure_count,
-            "LLM Prefill": avg_pref / measure_count,
+            "Image Preprocessing": avg_prep    / measure_count,
+            "ViT":                 avg_vit     / measure_count,
+            "Pixel Shuffle":       avg_shuffle / measure_count,
+            "MLP":                 avg_mlp     / measure_count,
+            "LLM Prefill":         avg_pref    / measure_count,
         })
 
 pd.DataFrame(results).to_csv("internvl_e2e_breakdown.csv", index=False)

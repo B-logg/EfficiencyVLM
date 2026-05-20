@@ -40,12 +40,12 @@ def plot_qwen_breakdown():
     x = np.arange(len(x_labels))
     width = 0.35
 
-    # E2E: Preprocessing | ViT + Merger (합산) | Prefill  (Fusion 제외)
+    # E2E: Preprocessing | ViT only | Prefill  (Merger excluded)
     e_prep = e2e['Image Preprocessing'].fillna(0).values
-    e_enc  = (e2e['ViT'].fillna(0) + e2e['Merger'].fillna(0)).values  # ViT + Merger 합산
+    e_enc  = e2e['ViT'].fillna(0).values
     e_pref = e2e['LLM Prefill (TTFT)'].fillna(0).values
 
-    # Cached: 0 | DB Load | Prefill  (Fusion 제외)
+    # Cached: 0 | DB Load only | Prefill  (Merger excluded from breakdown)
     c_prep = np.zeros(len(cached))
     c_enc  = cached['DB Load'].fillna(0).values
     c_pref = cached['LLM Prefill (TTFT)'].fillna(0).values
@@ -67,7 +67,7 @@ def plot_qwen_breakdown():
     ax.set_xticklabels(x_labels, fontsize=11)
     ax.set_xlabel("Image Resolution\n(Left: E2E  |  Right: Cached)", fontsize=12, fontweight='bold')
     ax.set_ylabel("Latency (ms)", fontsize=12, fontweight='bold')
-    ax.set_title("Qwen2-VL TTFT Breakdown\n(Image Encoding = ViT + Merger)", fontsize=15, fontweight='bold')
+    ax.set_title("Qwen2-VL TTFT Breakdown\n(Encoding = ViT / DB Load only; Merger excluded)", fontsize=13, fontweight='bold')
     ax.grid(axis='y', linestyle='--', alpha=0.6)
 
     legend_elements = [Patch(facecolor=c, edgecolor='white', label=l)

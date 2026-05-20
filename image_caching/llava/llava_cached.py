@@ -6,8 +6,8 @@ from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 EMBED_DIR = "./llava_vision_embeddings"
-NUM_TEST_SAMPLES = 3100
-WARMUP_SAMPLES = 30
+NUM_TEST_SAMPLES = 1050
+WARMUP_SAMPLES = 50
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class CUDATimer:
@@ -33,6 +33,7 @@ model = LlavaNextForConditionalGeneration.from_pretrained(MODEL_ID, torch_dtype=
 processor = LlavaNextProcessor.from_pretrained(MODEL_ID)
 dataset = load_dataset("detection-datasets/coco", split=f"val[:{NUM_TEST_SAMPLES}]", trust_remote_code=True)
 image_token_id = processor.tokenizer.convert_tokens_to_ids("<image>")
+projector = getattr(model, 'multi_modal_projector', getattr(getattr(model, 'model', None), 'multi_modal_projector', None))
 
 results = []
 print("Starting LLaVA Cached Inference...")
@@ -54,14 +55,21 @@ with torch.no_grad():
         torch.cuda.synchronize()  # .to(device) H2D 완료 대기
         r_text = time.perf_counter() - _t
 
-        # 2b. DB Load: CPU(disk I/O) + H2D → wall clock
+        # 2b. DB Load: CPU(disk I/O) + H2D → wall clock (ViT features)
         _t = time.perf_counter()
-        img_embs = torch.load(pt_path).to(device, dtype=torch.bfloat16)
+        vit_features = torch.load(pt_path).to(device, dtype=torch.bfloat16)
+        torch.cuda.synchronize()  # H2D 전송 완료 대기
+        r_db = time.perf_counter() - _t
+
+        # 2b_mlp. Projector: pure GPU → CUDA Event
+        t_mlp = CUDATimer(); t_mlp.start()
+        img_embs = projector(vit_features)
         if img_embs.dim() == 4: img_embs = img_embs.flatten(1, 2)
         if img_embs.dim() == 3 and img_embs.shape[0] != 1:
             img_embs = img_embs.view(1, -1, img_embs.shape[-1])
-        torch.cuda.synchronize()  # H2D 전송 완료 대기
-        r_db = time.perf_counter() - _t
+        t_mlp.stop()
+        torch.cuda.synchronize()
+        r_mlp = t_mlp.get_time()
 
         # 3. Fusion: pure GPU (embedding lookup + cat) → CUDA Event
         t_fus = CUDATimer(); t_fus.start()
@@ -86,11 +94,11 @@ with torch.no_grad():
 
         if idx >= WARMUP_SAMPLES:
             r4 = t_gen.start_event.elapsed_time(hnd.first_token_event) / 1000.0
-            true_ttft = r_text + r_db + r_fus + r4
+            true_ttft = r_text + r_db + r_mlp + r_fus + r4
             decode = (t_gen.get_time() - r4) if outs.shape[1] > 1 else 0.0
-            results.append([r_text, 0.0, 0.0, r_db, r_fus, r4, true_ttft, decode, true_ttft + decode,
+            results.append([r_text, 0.0, 0.0, r_db, r_mlp, r_fus, r4, true_ttft, decode, true_ttft + decode,
                             torch.cuda.max_memory_allocated() / (1024**3), outs.shape[1]])
 
-df = pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_db_load','3_fusion','4_gen',
+df = pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_db_load','2b_mlp','3_fusion','4_gen',
                                      'true_ttft','decode_time','total_latency','vram','tokens'])
 df.to_csv("llava_cached.csv", index=False)

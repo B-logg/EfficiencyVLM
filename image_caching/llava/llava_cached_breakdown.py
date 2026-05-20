@@ -15,8 +15,8 @@ RESOLUTIONS = {
     "1792x1792": (1792, 1792),
     "2520x2520": (2520, 2520),
 }
-WARMUP_ITER = 30
-NUM_ITER = WARMUP_ITER + 500
+WARMUP_ITER = 50
+NUM_ITER = WARMUP_ITER + 300
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -51,14 +51,11 @@ with torch.no_grad():
         vision_tower = getattr(model, 'vision_tower', getattr(model.model, 'vision_tower', None))
         projector = getattr(model, 'multi_modal_projector', getattr(model.model, 'multi_modal_projector', None))
         v_out = vision_tower(pixel_values, output_hidden_states=True)
-        img_embs_pre = projector(v_out.hidden_states[-2])
-        if img_embs_pre.dim() == 4: img_embs_pre = img_embs_pre.flatten(1, 2)
-        if img_embs_pre.dim() == 3 and img_embs_pre.shape[0] != 1:
-            img_embs_pre = img_embs_pre.view(1, -1, img_embs_pre.shape[-1])
-        torch.save(img_embs_pre.cpu(), f"temp_llava_{label}.pt")
+        vit_pre = v_out.hidden_states[-2]  # projector runs at query time
+        torch.save(vit_pre.cpu(), f"temp_llava_{label}.pt")
         torch.cuda.synchronize()
 
-        avg_db, avg_fus, avg_pref, measure_count = 0.0, 0.0, 0.0, 0
+        avg_db, avg_proj, avg_fus, avg_pref, measure_count = 0.0, 0.0, 0.0, 0.0, 0
         crash_flag = False
 
         for i in tqdm(range(NUM_ITER)):
@@ -67,14 +64,21 @@ with torch.no_grad():
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
 
-            # 1. DB Load: CPU(disk I/O) + H2D → wall clock
+            # 1. DB Load: CPU(disk I/O) + H2D → wall clock (ViT features)
             _t = time.perf_counter()
-            img_embs = torch.load(f"temp_llava_{label}.pt").to(device, torch.bfloat16)
+            vit_features = torch.load(f"temp_llava_{label}.pt").to(device, torch.bfloat16)
+            torch.cuda.synchronize()  # H2D 전송 완료 대기
+            t_db_ms = (time.perf_counter() - _t) * 1000
+
+            # 1b. Projector: pure GPU → CUDA Event
+            t_proj = CUDATimer(); t_proj.start()
+            img_embs = projector(vit_features)
             if img_embs.dim() == 4: img_embs = img_embs.flatten(1, 2)
             if img_embs.dim() == 3 and img_embs.shape[0] != 1:
                 img_embs = img_embs.view(1, -1, img_embs.shape[-1])
-            torch.cuda.synchronize()  # H2D 전송 완료 대기
-            t_db_ms = (time.perf_counter() - _t) * 1000
+            t_proj.stop()
+            torch.cuda.synchronize()
+            t_proj_ms = t_proj.get_time() * 1000
 
             # 2. Fusion: pure GPU (embedding lookup + cat) → CUDA Event
             try:
@@ -106,18 +110,19 @@ with torch.no_grad():
 
                 if i >= WARMUP_ITER:
                     avg_db   += t_db_ms
+                    avg_proj += t_proj_ms
                     avg_fus  += t_fus_ms
                     avg_pref += t_pref_ms
                     measure_count += 1
             except Exception as e:
                 print(f"Crash Details: {e}")
-                avg_db, avg_fus, avg_pref, measure_count, crash_flag = 0, 0, 0, 1, True; break
+                avg_db, avg_proj, avg_fus, avg_pref, measure_count, crash_flag = 0, 0, 0, 0, 1, True; break
 
         results.append({
             "Resolution": label,
             "Image Preprocessing": 0.0,
             "DB Load": avg_db / measure_count,
-            "Fusion": avg_fus / measure_count,
+            "Projector": avg_proj / measure_count,
             "LLM Prefill (TTFT)": avg_pref / measure_count,
         })
 

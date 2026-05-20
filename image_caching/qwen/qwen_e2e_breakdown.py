@@ -15,8 +15,8 @@ RESOLUTIONS = {
     "1792x1792": (1792, 1792),
     "2520x2520": (2520, 2520),
 }
-WARMUP_ITER = 30
-NUM_ITER = WARMUP_ITER + 500
+WARMUP_ITER = 50
+NUM_ITER = WARMUP_ITER + 300
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)

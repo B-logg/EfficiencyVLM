@@ -20,9 +20,9 @@ run() {
 }
 
 run qwen_anyres_encoding.py
+run qwen_e2e_breakdown.py
 run qwen_cached_breakdown.py
 run qwen_cached.py
-run qwen_e2e_breakdown.py
 run qwen_e2e.py
 
 echo ""

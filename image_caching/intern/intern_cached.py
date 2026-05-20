@@ -7,8 +7,8 @@ from transformers.modeling_utils import PreTrainedModel
 
 MODEL_ID = "OpenGVLab/InternVL3_5-8B"
 EMBED_DIR = "./internvl_vision_embeddings"
-NUM_TEST_SAMPLES = 3100
-WARMUP_SAMPLES = 30
+NUM_TEST_SAMPLES = 1050
+WARMUP_SAMPLES = 50
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class CUDATimer:

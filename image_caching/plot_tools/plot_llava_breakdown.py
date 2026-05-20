@@ -1,9 +1,9 @@
 """
-LLaVA-1.6 Breakdown Chart
+LLaVA-1.6 Breakdown Chart (3 segments only)
 - E2E:    Image Preprocessing | Image Encoding (ViT+Projector) | LLM Prefill
-- Cached: DB Load             |                                | LLM Prefill
+- Cached: 0                   | DB Load                        | LLM Prefill
 
-Fusion 컬럼은 차트에 포함하지 않습니다.
+Projector (Cached), Fusion excluded from this chart.
 """
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -40,12 +40,12 @@ def plot_llava_breakdown():
     x = np.arange(len(x_labels))
     width = 0.35
 
-    # E2E: Preprocessing | Image Encoding | Prefill  (Fusion 제외)
+    # E2E: Preprocessing | ViT only | Prefill  (Projector excluded)
     e_prep = e2e['Image Preprocessing'].fillna(0).values
-    e_enc  = e2e['Image Encoding'].fillna(0).values
+    e_enc  = e2e['ViT'].fillna(0).values
     e_pref = e2e['LLM Prefill (TTFT)'].fillna(0).values
 
-    # Cached: 0 | DB Load | Prefill  (Fusion 제외)
+    # Cached: 0 | DB Load only | Prefill  (Projector excluded)
     c_prep = np.zeros(len(cached))
     c_enc  = cached['DB Load'].fillna(0).values
     c_pref = cached['LLM Prefill (TTFT)'].fillna(0).values
@@ -67,7 +67,7 @@ def plot_llava_breakdown():
     ax.set_xticklabels(x_labels, fontsize=11)
     ax.set_xlabel("Image Resolution\n(Left: E2E  |  Right: Cached)", fontsize=12, fontweight='bold')
     ax.set_ylabel("Latency (ms)", fontsize=12, fontweight='bold')
-    ax.set_title("LLaVA-1.6 TTFT Breakdown", fontsize=15, fontweight='bold')
+    ax.set_title("LLaVA-1.6 TTFT Breakdown\n(Encoding = ViT / DB Load only; Projector excluded)", fontsize=13, fontweight='bold')
     ax.grid(axis='y', linestyle='--', alpha=0.6)
 
     legend_elements = [Patch(facecolor=c, edgecolor='white', label=l)

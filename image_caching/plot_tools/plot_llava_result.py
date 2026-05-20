@@ -22,8 +22,8 @@ import os
 STAGES = [
     ("Text",            "1a_text",  "1a_text"),
     ("Img Preproc",     "1b_img",   "1b_img"),
-    ("ViT / DB Load",   "2a_vit",   "2b_db_load"),  # Cached: DB Load goes to ViT slot
-    ("Projector",       "2b_mlp",   None),           # Cached: 0 (projector already cached)
+    ("ViT / DB Load",   "2a_vit",   "2b_db_load"),  # E2E: ViT, Cached: DB Load
+    ("Projector",       "2b_mlp",   "2b_mlp"),       # both: projector runs at query time
     ("Fusion",          "3_fusion", "3_fusion"),
     ("Gen (TTFT)",      "4_gen",    "4_gen"),
 ]

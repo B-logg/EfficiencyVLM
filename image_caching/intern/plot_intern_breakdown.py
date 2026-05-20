@@ -35,9 +35,9 @@ def plot_intern_breakdown():
     x = np.arange(len(x_labels))
     width = 0.35
 
-    # --- E2E segments ---
+    # --- E2E segments: ViT only (Pixel Shuffle + MLP excluded) ---
     e_prep = e2e['Image Preprocessing'].fillna(0).values
-    e_enc  = e2e['Image Encoding'].fillna(0).values
+    e_enc  = e2e['ViT'].fillna(0).values
     e_pref = e2e['LLM Prefill'].fillna(0).values
 
     # --- Cached segments: preprocessing=0, DB Load as encoding slot ---
@@ -64,7 +64,7 @@ def plot_intern_breakdown():
     ax.set_xticklabels(x_labels, fontsize=11)
     ax.set_xlabel("Image Resolution\n(Left: E2E  |  Right: Cached)", fontsize=12, fontweight='bold')
     ax.set_ylabel("Latency (ms)", fontsize=12, fontweight='bold')
-    ax.set_title("InternVL TTFT Breakdown", fontsize=15, fontweight='bold')
+    ax.set_title("InternVL TTFT Breakdown\n(Encoding = ViT / DB Load only; Pixel Shuffle + MLP excluded)", fontsize=13, fontweight='bold')
     ax.grid(axis='y', linestyle='--', alpha=0.6)
 
     legend_elements = [Patch(facecolor=c, edgecolor='white', label=l)
