@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Cached Video Query Experiment (Stage A + Stage B)
 #
-# Stage A: decode → preprocess → ViT(×100f) → pixel_shuffle → .pt 저장 (1회)
+# Stage A: decode → preprocess → ViT(×120f) → pixel_shuffle → .pt 저장 (1회)
 # Stage B: .pt 로드 → MLP → LLM per query
 #
 # Fixed settings:
-#   FPS=10, clip=10s → 100 frames encoded
-#   LLM input: 100 frames (fits within 32k context)
+#   FPS=12, clip=10s → 120 frames encoded (context: 40960, all 120 frames safe)
+#   LLM input: 120 frames (30720 img tokens + overhead < 40960)
 #   QA samples: 100
 
 set -euo pipefail
@@ -24,7 +24,7 @@ cd "$BASE_DIR"
 
 echo "================================================================"
 echo "Cached Video Query Experiment (Stage A + Stage B)"
-echo "FPS=10 | clip=10s | 100 frames encoded → all 100 to LLM"
+echo "FPS=12 | clip=10s | 120 frames encoded → all 120 to LLM"
 echo "Max QA samples: ${MAX_SAMPLES} | Warmup: ${WARMUP}"
 echo "Embed cache dir: ${EMBED_DIR}"
 echo "================================================================"

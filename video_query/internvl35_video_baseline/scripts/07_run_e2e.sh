@@ -3,8 +3,8 @@
 # 쿼리가 들어올 때마다 처음부터 처리: decode → preprocess → ViT → pixel_shuffle → MLP → LLM
 #
 # 고정 설정:
-#   FPS=10, clip=10s → 100 프레임 인코딩
-#   LLM 입력: 16 프레임 서브샘플 (OOM 안전 범위)
+#   FPS=12, clip=10s → 120 프레임 인코딩 (context: 40960, 156프레임 한도)
+#   LLM 입력: 120 프레임 전체 (26368+충분한여유 < 40960)
 #   QA 샘플: 100개
 
 set -euo pipefail
@@ -15,7 +15,7 @@ MVBENCH_ROOT="${MVBENCH_ROOT:-data/mvbench}"
 DEVICE="${DEVICE:-cuda}"
 MAX_SAMPLES="${MAX_SAMPLES:-100}"
 WARMUP="${WARMUP:-5}"
-NF_LLM="${NF_LLM:-16}"    # LLM 입력 서브샘플 프레임 수
+NF_LLM="${NF_LLM:-120}"   # LLM 입력 프레임 수 (12fps×10s=120, 전체 프레임)
 OUTPUT_DIR="outputs/e2e"
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,7 +23,7 @@ cd "$BASE_DIR"
 
 echo "================================================================"
 echo "E2E Video Query Experiment"
-echo "FPS=10 | clip=10s | 100 frames encoded | LLM input=${NF_LLM} frames"
+echo "FPS=12 | clip=10s | 120 frames encoded | LLM input=${NF_LLM} frames"
 echo "Max QA samples: ${MAX_SAMPLES} | Warmup: ${WARMUP}"
 echo "================================================================"
 
