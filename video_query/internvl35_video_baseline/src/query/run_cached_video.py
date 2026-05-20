@@ -320,6 +320,8 @@ def main():
     parser.add_argument("--embed_dir",      default="outputs/cached_video_embeddings")
     parser.add_argument("--output_dir",     default="outputs/cached_video")
     parser.add_argument("--run_id",         default=None)
+    parser.add_argument("--stage_a_only",   action="store_true",
+                        help="Stage A(인코딩)만 실행하고 Stage B(LLM)는 건너뜀")
     args = parser.parse_args()
 
     set_seed(42)
@@ -395,6 +397,10 @@ def main():
         writer.writeheader()
         writer.writerows(stage_a_results)
     logger.info(f"Stage A 완료 ({len(stage_a_results)}개 비디오) → {a_csv_path}")
+
+    if args.stage_a_only:
+        logger.info("--stage_a_only: Stage B 건너뜀. 종료.")
+        return
 
     # ── Stage B: 쿼리 처리 ────────────────────────────────────────────────
     logger.info("Stage B: 쿼리 처리 시작...")
