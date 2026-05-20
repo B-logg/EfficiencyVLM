@@ -7,7 +7,7 @@ from datasets import load_dataset
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 SAVE_DIR = "./llava_vision_embeddings"
-NUM_TEST_SAMPLES = 1010
+NUM_TEST_SAMPLES = 3100
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

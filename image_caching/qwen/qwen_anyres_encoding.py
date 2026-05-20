@@ -7,7 +7,7 @@ from datasets import load_dataset
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 SAVE_DIR = "./qwen_vision_embeddings"
-NUM_TEST_SAMPLES = 1010
+NUM_TEST_SAMPLES = 3100
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

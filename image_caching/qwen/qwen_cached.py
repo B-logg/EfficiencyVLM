@@ -1,5 +1,4 @@
-import os
-import torch
+import os, torch, time
 import pandas as pd
 from datasets import load_dataset
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, LogitsProcessor, LogitsProcessorList
@@ -7,8 +6,8 @@ from tqdm import tqdm
 
 MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
 EMBED_DIR = "./qwen_vision_embeddings"
-NUM_TEST_SAMPLES = 210
-WARMUP_SAMPLES = 10
+NUM_TEST_SAMPLES = 3100
+WARMUP_SAMPLES = 30
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class CUDATimer:
@@ -17,7 +16,7 @@ class CUDATimer:
         self.end_event = torch.cuda.Event(enable_timing=True)
     def start(self): self.start_event.record()
     def stop(self): self.end_event.record()
-    def get_time(self): return self.start_event.elapsed_time(self.end_event) / 1000.0
+    def get_time(self): return self.start_event.elapsed_time(self.end_event) / 1000.0  # elapsed_time auto-syncs
 
 class TTFTLogitsProcessor(LogitsProcessor):
     def __init__(self):
@@ -40,45 +39,59 @@ with torch.no_grad():
     for idx, data in enumerate(tqdm(dataset)):
         pt_path = os.path.join(EMBED_DIR, f"embed_{data['image_id']}.pt")
         if not os.path.exists(pt_path): continue
-        
+
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
-        
-        timer_text = CUDATimer(); timer_mlp = CUDATimer(); timer_fusion = CUDATimer(); timer_gen = CUDATimer()
-        
-        timer_mlp.start()
+
+        # 2b. DB Load: CPU(disk I/O) + H2D → wall clock
+        # Qwen2-VL: visual encoder(ViT+merger)까지 캐싱됨, grid_thw도 함께 로드
+        _t = time.perf_counter()
         saved_data = torch.load(pt_path)
         image_embeds = saved_data["embeds"].to(device, dtype=torch.bfloat16)
         grid_thw = saved_data["grid_thw"].to(device)
         N_patches = image_embeds.shape[0]
-        timer_mlp.stop()
+        torch.cuda.synchronize()  # H2D 전송 완료 대기
+        r_db = time.perf_counter() - _t
 
-        timer_text.start()
+        # 1a. Text tokenization: CPU(string 구성 + tokenize) → wall clock
+        # Qwen2-VL: N_patches 수만큼 <|image_pad|> 토큰을 프롬프트에 삽입
+        _t = time.perf_counter()
         image_token_str = "<|vision_start|>" + ("<|image_pad|>" * N_patches) + "<|vision_end|>"
-        text_prompt = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{image_token_str}Describe this image in detail.<|im_end|>\n<|im_start|>assistant\n"
+        text_prompt = (f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+                       f"<|im_start|>user\n{image_token_str}Describe this image in detail.<|im_end|>\n"
+                       f"<|im_start|>assistant\n")
         txt_in = processor.tokenizer(text_prompt, return_tensors="pt").to(device)
-        timer_text.stop()
-        
-        timer_fusion.start()
+        torch.cuda.synchronize()  # .to(device) 완료 대기
+        r_text = time.perf_counter() - _t
+
+        # 3. Fusion: GPU (embedding lookup + in-place image token 교체) → CUDA Event
+        t_fus = CUDATimer(); t_fus.start()
         in_embs = model.get_input_embeddings()(txt_in.input_ids)
         image_mask = (txt_in.input_ids == processor.tokenizer.convert_tokens_to_ids("<|image_pad|>"))
         in_embs[image_mask] = image_embeds
-        timer_fusion.stop()
-        
+        t_fus.stop()
         torch.cuda.synchronize()
-        timer_gen.start()
+        r_fus = t_fus.get_time()
+
+        # 4. Generate: pure GPU → CUDA Event
         hnd = TTFTLogitsProcessor()
-        outs = model.generate(inputs_embeds=in_embs, attention_mask=txt_in.attention_mask, image_grid_thw=grid_thw, max_new_tokens=64, logits_processor=LogitsProcessorList([hnd]))
-        timer_gen.stop()
+        t_gen = CUDATimer(); t_gen.start()
+        outs = model.generate(
+            inputs_embeds=in_embs, attention_mask=txt_in.attention_mask,
+            image_grid_thw=grid_thw, max_new_tokens=64,
+            logits_processor=LogitsProcessorList([hnd])
+        )
+        t_gen.stop()
         torch.cuda.synchronize()
 
         if idx >= WARMUP_SAMPLES:
-            r1a, r2b, r3 = timer_text.get_time(), timer_mlp.get_time(), timer_fusion.get_time()
-            r4 = timer_gen.start_event.elapsed_time(hnd.first_token_event) / 1000.0
-            true_ttft = r1a + r2b + r3 + r4
-            decode = (timer_gen.get_time() - r4) if outs.shape[1] > 1 else 0.0
-            results.append([r1a, 0.0, 0.0, r2b, r3, r4, true_ttft, decode, true_ttft+decode, torch.cuda.max_memory_allocated()/(1024**3), outs.shape[1]])
+            r4 = t_gen.start_event.elapsed_time(hnd.first_token_event) / 1000.0
+            true_ttft = r_text + r_db + r_fus + r4
+            decode = (t_gen.get_time() - r4) if outs.shape[1] > 1 else 0.0
+            results.append([r_text, 0.0, 0.0, r_db, r_fus, r4, true_ttft, decode, true_ttft + decode,
+                            torch.cuda.max_memory_allocated() / (1024**3), outs.shape[1]])
 
-df = pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_mlp','3_fusion','4_gen','true_ttft','decode_time','total_latency','vram','tokens'])
+df = pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_mlp','3_fusion','4_gen',
+                                     'true_ttft','decode_time','total_latency','vram','tokens'])
 df.to_csv("qwen_cached.csv", index=False)

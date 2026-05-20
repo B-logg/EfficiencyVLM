@@ -1,5 +1,4 @@
-import os
-import torch
+import os, torch, time
 import pandas as pd
 from datasets import load_dataset
 from transformers import LlavaNextForConditionalGeneration, LlavaNextProcessor, LogitsProcessor, LogitsProcessorList
@@ -7,8 +6,8 @@ from tqdm import tqdm
 
 MODEL_ID = "llava-hf/llava-v1.6-vicuna-7b-hf"
 EMBED_DIR = "./llava_vision_embeddings"
-NUM_TEST_SAMPLES = 210
-WARMUP_SAMPLES = 10
+NUM_TEST_SAMPLES = 3100
+WARMUP_SAMPLES = 30
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class CUDATimer:
@@ -17,7 +16,7 @@ class CUDATimer:
         self.end_event = torch.cuda.Event(enable_timing=True)
     def start(self): self.start_event.record()
     def stop(self): self.end_event.record()
-    def get_time(self): return self.start_event.elapsed_time(self.end_event) / 1000.0
+    def get_time(self): return self.start_event.elapsed_time(self.end_event) / 1000.0  # elapsed_time auto-syncs
 
 class TTFTLogitsProcessor(LogitsProcessor):
     def __init__(self):
@@ -41,45 +40,57 @@ with torch.no_grad():
     for idx, data in enumerate(tqdm(dataset)):
         pt_path = os.path.join(EMBED_DIR, f"embed_{data['image_id']}.pt")
         if not os.path.exists(pt_path): continue
-        
+
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
-        
-        timer_text = CUDATimer(); timer_mlp = CUDATimer(); timer_fusion = CUDATimer(); timer_gen = CUDATimer()
-        
-        timer_text.start()
-        txt_in = processor.tokenizer("USER: <image>\nDescribe this image in detail.\nASSISTANT:", return_tensors="pt").to(device)
-        timer_text.stop()
-        
-        # 2b. DB Load
-        timer_mlp.start()
+
+        # 1a. Text tokenization: CPU → wall clock
+        _t = time.perf_counter()
+        txt_in = processor.tokenizer(
+            "USER: <image>\nDescribe this image in detail.\nASSISTANT:",
+            return_tensors="pt"
+        ).to(device)
+        torch.cuda.synchronize()  # .to(device) H2D 완료 대기
+        r_text = time.perf_counter() - _t
+
+        # 2b. DB Load: CPU(disk I/O) + H2D → wall clock
+        _t = time.perf_counter()
         img_embs = torch.load(pt_path).to(device, dtype=torch.bfloat16)
-        if img_embs.dim() == 4: img_embs = img_embs.flatten(1, 2) 
-        if img_embs.dim() == 3 and img_embs.shape[0] != 1: img_embs = img_embs.view(1, -1, img_embs.shape[-1])
-        timer_mlp.stop()
-        
-        timer_fusion.start()
+        if img_embs.dim() == 4: img_embs = img_embs.flatten(1, 2)
+        if img_embs.dim() == 3 and img_embs.shape[0] != 1:
+            img_embs = img_embs.view(1, -1, img_embs.shape[-1])
+        torch.cuda.synchronize()  # H2D 전송 완료 대기
+        r_db = time.perf_counter() - _t
+
+        # 3. Fusion: pure GPU (embedding lookup + cat) → CUDA Event
+        t_fus = CUDATimer(); t_fus.start()
         in_embs = model.get_input_embeddings()(txt_in.input_ids)
         idx_img = torch.where(txt_in.input_ids == image_token_id)[1][0]
         f_embs = torch.cat([in_embs[:, :idx_img, :], img_embs, in_embs[:, idx_img+1:, :]], dim=1)
         m_img = torch.ones((1, img_embs.shape[1]), dtype=txt_in.attention_mask.dtype, device=device)
         f_mask = torch.cat([txt_in.attention_mask[:, :idx_img], m_img, txt_in.attention_mask[:, idx_img+1:]], dim=1)
-        timer_fusion.stop()
-        
-        torch.cuda.synchronize()
-        timer_gen.start()
+        t_fus.stop()
+        torch.cuda.synchronize()  # generate 전에 fusion 완료 보장
+        r_fus = t_fus.get_time()
+
+        # 4. Generate: pure GPU → CUDA Event
         hnd = TTFTLogitsProcessor()
-        outs = model.generate(inputs_embeds=f_embs, attention_mask=f_mask, max_new_tokens=64, logits_processor=LogitsProcessorList([hnd]))
-        timer_gen.stop()
+        t_gen = CUDATimer(); t_gen.start()
+        outs = model.generate(
+            inputs_embeds=f_embs, attention_mask=f_mask,
+            max_new_tokens=64, logits_processor=LogitsProcessorList([hnd])
+        )
+        t_gen.stop()
         torch.cuda.synchronize()
 
         if idx >= WARMUP_SAMPLES:
-            r1a, r2b, r3 = timer_text.get_time(), timer_mlp.get_time(), timer_fusion.get_time()
-            r4 = timer_gen.start_event.elapsed_time(hnd.first_token_event) / 1000.0
-            true_ttft = r1a + r2b + r3 + r4
-            decode = (timer_gen.get_time() - r4) if outs.shape[1] > 1 else 0.0
-            results.append([r1a, 0.0, 0.0, r2b, r3, r4, true_ttft, decode, true_ttft+decode, torch.cuda.max_memory_allocated()/(1024**3), outs.shape[1]])
+            r4 = t_gen.start_event.elapsed_time(hnd.first_token_event) / 1000.0
+            true_ttft = r_text + r_db + r_fus + r4
+            decode = (t_gen.get_time() - r4) if outs.shape[1] > 1 else 0.0
+            results.append([r_text, 0.0, 0.0, r_db, r_fus, r4, true_ttft, decode, true_ttft + decode,
+                            torch.cuda.max_memory_allocated() / (1024**3), outs.shape[1]])
 
-df = pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_mlp','3_fusion','4_gen','true_ttft','decode_time','total_latency','vram','tokens'])
+df = pd.DataFrame(results, columns=['1a_text','1b_img','2a_vit','2b_db_load','3_fusion','4_gen',
+                                     'true_ttft','decode_time','total_latency','vram','tokens'])
 df.to_csv("llava_cached.csv", index=False)
