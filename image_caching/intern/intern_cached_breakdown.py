@@ -1,4 +1,5 @@
 import os, torch
+import numpy as np
 import pandas as pd
 from PIL import Image
 from transformers import AutoModel, AutoTokenizer, LogitsProcessor, LogitsProcessorList, PreTrainedModel
@@ -19,7 +20,8 @@ RESOLUTIONS = {
     "4K (Tokens)": (4, 4),
     "8K (Tokens)": (4, 8)
 }
-NUM_ITER = 50
+WARMUP_ITER = 30
+NUM_ITER = WARMUP_ITER + 500
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -53,7 +55,8 @@ with torch.no_grad():
         # ------------------------------------------------------------
         # [사전 작업] Cached 환경이므로 ViT 결과를 미리 연산하여 저장
         # ------------------------------------------------------------
-        dummy_image = Image.new('RGB', (448, 448), color='white')
+        dummy_array = np.random.randint(0, 256, (448, 448, 3), dtype=np.uint8)
+        dummy_image = Image.fromarray(dummy_array)
         pixel_values = torch.stack([transform(dummy_image) for _ in range(num_tiles)]).to(device, dtype=torch.bfloat16)
         vit = model.vision_model(pixel_values).last_hidden_state[:, 1:, :]
         torch.save({"vit_embeds": vit.cpu()}, f"temp_internvl_breakdown_{h*w}.pt")
@@ -99,7 +102,7 @@ with torch.no_grad():
             try:
                 torch.cuda.synchronize(); hnd = TTFTLogitsProcessor()
                 model.language_model.generate(inputs_embeds=f_embs, attention_mask=f_mask, max_new_tokens=10, logits_processor=LogitsProcessorList([hnd])); t_pref.stop(); torch.cuda.synchronize()
-                if i >= 10:
+                if i >= WARMUP_ITER:
                     avg_enc += t_enc.time() * 1000; avg_pref += t_pref.s.elapsed_time(hnd.evt); measure_count += 1
             except Exception as e:
                 print(f"Crash Details: {e}")

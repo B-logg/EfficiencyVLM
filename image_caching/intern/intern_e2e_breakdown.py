@@ -1,4 +1,5 @@
 import os, torch
+import numpy as np
 import pandas as pd
 from PIL import Image
 from transformers import AutoModel, AutoTokenizer, LogitsProcessor, LogitsProcessorList, PreTrainedModel
@@ -20,7 +21,8 @@ RESOLUTIONS = {
     "4K (Tokens)": (4, 4),
     "8K (Tokens)": (4, 8)
 }
-NUM_ITER = 50
+WARMUP_ITER = 30
+NUM_ITER = WARMUP_ITER + 500
 
 class CUDATimer:
     def __init__(self): self.s = torch.cuda.Event(enable_timing=True); self.e = torch.cuda.Event(enable_timing=True)
@@ -52,7 +54,8 @@ with torch.no_grad():
         print(f"\nTesting InternVL E2E Breakdown - Resolution: {label}")
         num_tiles = h * w
         # 꼼수 대신 실제 PIL 이미지 사용
-        dummy_image = Image.new('RGB', (448, 448), color='white')
+        dummy_array = np.random.randint(0, 256, (448, 448, 3), dtype=np.uint8)
+        dummy_image = Image.fromarray(dummy_array)
         
         avg_prep, avg_enc, avg_pref, measure_count = 0.0, 0.0, 0.0, 0
         crash_flag = False
@@ -99,7 +102,7 @@ with torch.no_grad():
             try:
                 torch.cuda.synchronize(); hnd = TTFTLogitsProcessor()
                 model.language_model.generate(inputs_embeds=f_embs, attention_mask=f_mask, max_new_tokens=10, logits_processor=LogitsProcessorList([hnd])); t_pref.stop(); torch.cuda.synchronize()
-                if i >= 10:
+                if i >= WARMUP_ITER:
                     avg_prep += t_prep.time() * 1000; avg_enc += t_enc.time() * 1000; avg_pref += t_pref.s.elapsed_time(hnd.evt); measure_count += 1
             except Exception as e:
                 print(f"Crash Details: {e}")

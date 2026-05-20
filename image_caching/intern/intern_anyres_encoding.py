@@ -9,7 +9,7 @@ from transformers.modeling_utils import PreTrainedModel # [추가된 부분]
 
 MODEL_ID = "OpenGVLab/InternVL3_5-8B" 
 SAVE_DIR = "./internvl_vision_embeddings"
-NUM_TEST_SAMPLES = 1010
+NUM_TEST_SAMPLES = 3100
 os.makedirs(SAVE_DIR, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
