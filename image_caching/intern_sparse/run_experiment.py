@@ -197,7 +197,7 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     r_sparse = 0.0
     if pruner is not None:
         f_embs, f_mask, r_sparse_ms = pruner.prune(
-            lm_model  = model.language_model.model,
+            lm_model  = model.language_model,
             f_embs    = f_embs,
             f_mask    = f_mask,
             vis_start = vis_start,
@@ -298,7 +298,7 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
     r_sparse = 0.0
     if pruner is not None:
         f_embs, f_mask, r_sparse_ms = pruner.prune(
-            lm_model  = model.language_model.model,
+            lm_model  = model.language_model,
             f_embs    = f_embs,
             f_mask    = f_mask,
             vis_start = vis_start,

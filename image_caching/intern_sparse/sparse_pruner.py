@@ -27,44 +27,6 @@ from typing import Optional, Tuple
 import torch
 
 
-def _make_causal_mask(
-    lm_model,
-    f_embs: torch.Tensor,
-    seq_len: int,
-    dtype: torch.dtype,
-    device: str,
-) -> torch.Tensor:
-    """
-    Returns 4D additive causal mask [1, 1, seq_len, seq_len].
-    Tries the model's own _update_causal_mask first (version-safe),
-    falls back to manual construction if unavailable.
-    """
-    # 1순위: 모델 내부 메서드 (transformers 버전별 포맷 차이 없이 안전)
-    if hasattr(lm_model, "_update_causal_mask"):
-        try:
-            cache_position = torch.arange(seq_len, dtype=torch.long, device=device)
-            mask = lm_model._update_causal_mask(
-                attention_mask=None,
-                input_tensor=f_embs,
-                cache_position=cache_position,
-                past_key_values=None,
-                output_attentions=False,
-            )
-            if mask is not None:
-                return mask
-        except Exception:
-            pass  # fallthrough to manual
-
-    # 2순위: 표준 additive causal mask (0=attend, -inf=block)
-    mask = torch.full(
-        (1, 1, seq_len, seq_len),
-        torch.finfo(dtype).min,
-        dtype=dtype,
-        device=device,
-    )
-    return mask.triu(diagonal=1)   # upper-tri = -inf, lower+diag = 0
-
-
 class FastVPruner:
     """
     Args:
@@ -80,7 +42,7 @@ class FastVPruner:
     @torch.no_grad()
     def prune(
         self,
-        lm_model,               # model.language_model.model  (Qwen3Model)
+        lm_model,               # model.language_model  (ForCausalLM wrapper)
         f_embs: torch.Tensor,   # [1, seq_len, D_llm]  full fused input
         f_mask: torch.Tensor,   # [1, seq_len]
         vis_start: int,         # token index where visual tokens begin
@@ -98,31 +60,33 @@ class FastVPruner:
 
         seq_len = f_embs.shape[1]
         vis_end = vis_start + n_visual
-        dtype   = f_embs.dtype
 
-        # ── 4D causal mask ────────────────────────────────────────────────────
-        # 모델 자체의 _update_causal_mask 우선 사용 (버전 호환성 보장)
-        # 없으면 표준 additive causal mask 수동 구성
-        causal_mask = _make_causal_mask(lm_model, f_embs, seq_len, dtype, device)
+        # ── Get base transformer model ────────────────────────────────────────
+        # model.language_model (ForCausalLM) 안에 있는 base transformer를 얻음.
+        # 없으면 lm_model 자체를 사용 (이미 base model인 경우).
+        base_model = getattr(lm_model, "model", lm_model)
 
-        position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
-
-        # ── Run layers 0 .. prune_layer ───────────────────────────────────────
-        hidden: torch.Tensor        = f_embs
+        # ── Full forward with output_attentions=True ──────────────────────────
+        # 레이어 직접 호출 대신 모델 자체의 forward를 사용 → 모델 구조에 독립적.
+        # attention_mask는 2D padding mask (all-ones) → 내부에서 4D causal mask 생성.
         attn_at_K: Optional[torch.Tensor] = None
-
-        for i, layer in enumerate(lm_model.layers[: self.prune_layer + 1]):
-            is_K = (i == self.prune_layer)
-            out  = layer(
-                hidden,
-                attention_mask=causal_mask,
-                position_ids=position_ids,
-                output_attentions=is_K,   # weights only needed at layer K
+        last_hidden: Optional[torch.Tensor] = None
+        try:
+            out = base_model(
+                inputs_embeds=f_embs,
+                attention_mask=f_mask,
+                output_attentions=True,
                 use_cache=False,
             )
-            hidden = out[0]               # [1, seq_len, D]
-            if is_K and len(out) > 1:
-                attn_at_K = out[1]        # [1, n_heads, seq_len, seq_len]
+            # out.attentions: tuple of [1, n_heads, seq, seq] per layer
+            if hasattr(out, "attentions") and out.attentions is not None:
+                if len(out.attentions) > self.prune_layer:
+                    attn_at_K = out.attentions[self.prune_layer]
+            if hasattr(out, "last_hidden_state"):
+                last_hidden = out.last_hidden_state
+        except Exception as e:
+            # forward 실패 → fallback은 아래에서 처리
+            pass
 
         # ── Compute visual token importance (paper criterion) ────────────────
         # FastV paper: importance[v] = mean attention received by visual token v
@@ -132,18 +96,18 @@ class FastVPruner:
         #   - pre-visual positions (0..vis_start-1) → visual: softmax ≈ 0 (future blocked)
         #   - visual positions (vis_start..vis_end-1) → earlier visual: non-zero (causal)
         #   - post-visual text (vis_end..seq_len-1)  → visual: non-zero (past visible)
-        #
-        # Using all positions (not just text) matches the paper and preserves
-        # spatial importance signals from visual self-attention.
         n_keep = max(1, int(n_visual * self.keep_ratio))
 
         if attn_at_K is not None:
             # all_to_vis: [n_heads, seq_len, n_visual]
             all_to_vis = attn_at_K[0, :, :, vis_start:vis_end]
             importance = all_to_vis.mean(dim=(0, 1))   # [n_visual]
+        elif last_hidden is not None:
+            # Fallback 1: L2 norm of visual hidden states
+            importance = last_hidden[0, vis_start:vis_end, :].norm(dim=-1)
         else:
-            # Fallback: L2 norm of visual hidden states at layer K
-            importance = hidden[0, vis_start:vis_end, :].norm(dim=-1)
+            # Fallback 2: uniform (모든 토큰 동일 가중치 → 앞쪽 절반 유지)
+            importance = torch.arange(n_visual, dtype=torch.float32, device=device).flip(0)
 
         keep_idx = importance.topk(n_keep).indices.sort().values
 
