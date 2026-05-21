@@ -4,8 +4,12 @@ Unified experiment runner for 4 InternVL3.5 pipelines × 2 datasets.
 Pipelines:
   baseline      : Preprocess → ViT → Unshuffle → MLP → Text → Fusion → Generate
   cached        : DB Load → MLP → Text → Fusion → Generate
-  sparse        : Preprocess → ViT → Unshuffle → MLP → SparseVLM → Text → Fusion → Generate
-  cached_sparse : DB Load → MLP → SparseVLM → Text → Fusion → Generate
+  sparse        : Preprocess → ViT → Unshuffle → MLP → Text → Fusion → FastV → Generate
+  cached_sparse : DB Load → MLP → Text → Fusion → FastV → Generate
+
+FastV pruning happens AFTER Fusion because text→visual attention requires
+the full sequence (visual + text tokens) to be present.
+Model must be loaded with attn_implementation="eager" for output_attentions=True.
 
 Datasets:
   vqav2 : VQAv2 validation, metric = VQA Accuracy
@@ -35,17 +39,18 @@ ROOT = str(Path(__file__).resolve().parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from sparse_pruner import NormBasedTokenPruner
+from sparse_pruner import FastVPruner
 from dataset_utils import (
     load_vqav2, load_pope,
     vqa_accuracy, extract_pope_answer, compute_pope_metrics,
 )
 
-MODEL_ID    = "OpenGVLab/InternVL3_5-8B"
-KEEP_RATIO  = 0.5          # 256 → 128 visual tokens
-N_WARMUP    = 50
-N_MEASURE   = 500
-POPE_N_PER_SPLIT = 200     # 200 × 3 splits = 600 total; N_MEASURE=500 used for timing avg
+MODEL_ID         = "OpenGVLab/InternVL3_5-8B"
+KEEP_RATIO       = 0.5   # 256 → 128 visual tokens
+PRUNE_LAYER      = 8     # LLM layer at which to extract text→visual attention
+N_WARMUP         = 50
+N_MEASURE        = 500
+POPE_N_PER_SPLIT = 200   # 200 × 3 splits = 600 total
 
 TRANSFORM = T.Compose([
     T.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),
@@ -131,7 +136,7 @@ def max_new_tokens_for(dataset: str) -> int:
 
 @torch.no_grad()
 def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
-    """Preprocess → ViT → Unshuffle → MLP → [Sparse] → Text → Fusion → Generate."""
+    """Preprocess → ViT → Unshuffle → MLP → Text → Fusion → [FastV] → Generate."""
     question = item["question"]
 
     # 1. Preprocess (CPU + H2D)
@@ -165,13 +170,7 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     torch.cuda.synchronize()
     r_mlp = t_mlp.get_time()
 
-    # 5. [Optional] Sparse pruning
-    r_sparse = 0.0
-    if pruner is not None:
-        img_embs, r_sparse = pruner.prune(img_embs)
-        r_sparse = r_sparse / 1000.0   # ms → s
-
-    # 6. Text tokenize + embed
+    # 5. Text tokenize + embed
     torch.cuda.synchronize()
     _t = time.perf_counter()
     tok_pre, tok_post = make_prompt_tokens(tokenizer, question, dataset, device)
@@ -180,9 +179,10 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     torch.cuda.synchronize()
     r_text = time.perf_counter() - _t
 
-    # 7. Fusion
+    # 6. Fusion  →  f_embs [1, seq_len, D],  f_mask [1, seq_len]
     t_fus = CUDATimer(); t_fus.start()
-    n_vis  = img_embs.shape[0]
+    n_vis     = img_embs.shape[0]          # 256 before pruning
+    vis_start = tok_pre.shape[1]           # index where visual tokens begin
     f_embs = torch.cat([emb_pre, img_embs.unsqueeze(0), emb_post], dim=1)
     f_mask = torch.cat([
         torch.ones_like(tok_pre),
@@ -192,6 +192,19 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     t_fus.stop()
     torch.cuda.synchronize()
     r_fus = t_fus.get_time()
+
+    # 7. [FastV] — runs AFTER fusion so text tokens are present for attention
+    r_sparse = 0.0
+    if pruner is not None:
+        f_embs, f_mask, r_sparse_ms = pruner.prune(
+            lm_model  = model.language_model.model,
+            f_embs    = f_embs,
+            f_mask    = f_mask,
+            vis_start = vis_start,
+            n_visual  = n_vis,
+            device    = device,
+        )
+        r_sparse = r_sparse_ms / 1000.0   # ms → s
 
     # 8. Generate
     hnd   = TTFTLogitsProcessor()
@@ -205,9 +218,9 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     t_gen.stop()
     torch.cuda.synchronize()
 
-    r_ttft  = t_gen.s.elapsed_time(hnd.evt) / 1000.0
+    r_ttft   = t_gen.s.elapsed_time(hnd.evt) / 1000.0
     r_decode = max(t_gen.get_time() - r_ttft, 0.0)
-    true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_sparse + r_text + r_fus + r_ttft
+    true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_text + r_fus + r_sparse + r_ttft
     total_lat = true_ttft + r_decode
     n_tok     = max(outs.shape[1] - 1, 1)
     tpot      = r_decode / n_tok
@@ -220,9 +233,9 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
         "t_unshuffle":  r_unsh,
         "t_db_load":    0.0,
         "t_mlp":        r_mlp,
-        "t_sparse":     r_sparse,
         "t_text":       r_text,
         "t_fusion":     r_fus,
+        "t_sparse":     r_sparse,
         "t_gen_ttft":   r_ttft,
         "true_ttft":    true_ttft,
         "decode_time":  r_decode,
@@ -236,7 +249,7 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
 
 @torch.no_grad()
 def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
-    """DB Load → MLP → [Sparse] → Text → Fusion → Generate."""
+    """DB Load → MLP → Text → Fusion → [FastV] → Generate."""
     question = item["question"]
     pt_path  = os.path.join(embed_dir, f"{item['dataset']}_{item['id']}.pt")
 
@@ -258,13 +271,7 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
     torch.cuda.synchronize()
     r_mlp = t_mlp.get_time()
 
-    # 3. [Optional] Sparse pruning
-    r_sparse = 0.0
-    if pruner is not None:
-        img_embs, r_sparse = pruner.prune(img_embs)
-        r_sparse = r_sparse / 1000.0
-
-    # 4. Text tokenize + embed
+    # 3. Text tokenize + embed
     torch.cuda.synchronize()
     _t = time.perf_counter()
     tok_pre, tok_post = make_prompt_tokens(tokenizer, question, dataset, device)
@@ -273,9 +280,10 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
     torch.cuda.synchronize()
     r_text = time.perf_counter() - _t
 
-    # 5. Fusion
+    # 4. Fusion  →  f_embs [1, seq_len, D],  f_mask [1, seq_len]
     t_fus = CUDATimer(); t_fus.start()
-    n_vis  = img_embs.shape[0]
+    n_vis     = img_embs.shape[0]          # 256 before pruning
+    vis_start = tok_pre.shape[1]           # index where visual tokens begin
     f_embs = torch.cat([emb_pre, img_embs.unsqueeze(0), emb_post], dim=1)
     f_mask = torch.cat([
         torch.ones_like(tok_pre),
@@ -285,6 +293,19 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
     t_fus.stop()
     torch.cuda.synchronize()
     r_fus = t_fus.get_time()
+
+    # 5. [FastV] — runs AFTER fusion so text tokens are present for attention
+    r_sparse = 0.0
+    if pruner is not None:
+        f_embs, f_mask, r_sparse_ms = pruner.prune(
+            lm_model  = model.language_model.model,
+            f_embs    = f_embs,
+            f_mask    = f_mask,
+            vis_start = vis_start,
+            n_visual  = n_vis,
+            device    = device,
+        )
+        r_sparse = r_sparse_ms / 1000.0   # ms → s
 
     # 6. Generate
     hnd   = TTFTLogitsProcessor()
@@ -300,7 +321,7 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
 
     r_ttft   = t_gen.s.elapsed_time(hnd.evt) / 1000.0
     r_decode = max(t_gen.get_time() - r_ttft, 0.0)
-    true_ttft = r_db + r_mlp + r_sparse + r_text + r_fus + r_ttft
+    true_ttft = r_db + r_mlp + r_text + r_fus + r_sparse + r_ttft
     total_lat = true_ttft + r_decode
     n_tok     = max(outs.shape[1] - 1, 1)
     tpot      = r_decode / n_tok
@@ -313,9 +334,9 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
         "t_unshuffle":  0.0,
         "t_db_load":    r_db,
         "t_mlp":        r_mlp,
-        "t_sparse":     r_sparse,
         "t_text":       r_text,
         "t_fusion":     r_fus,
+        "t_sparse":     r_sparse,
         "t_gen_ttft":   r_ttft,
         "true_ttft":    true_ttft,
         "decode_time":  r_decode,
@@ -339,7 +360,7 @@ def run_pipeline_on_dataset(
     embed_dir: str,
     results_dir: str,
 ):
-    pruner    = NormBasedTokenPruner(KEEP_RATIO) if "sparse" in pipeline else None
+    pruner    = FastVPruner(KEEP_RATIO, PRUNE_LAYER) if "sparse" in pipeline else None
     use_cache = "cached" in pipeline
 
     out_path = os.path.join(results_dir, f"{pipeline}_{dataset_name}.csv")
@@ -488,10 +509,30 @@ def main():
 
     # ── Load model ────────────────────────────────────────────────────────
     print(f"Loading model: {MODEL_ID}")
+    # ── CUDA 가용성 확인 ──────────────────────────────────────────────────
+    device = args.device
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            print("[WARN] CUDA를 사용할 수 없습니다. CPU로 전환합니다.")
+            device = "cpu"
+        else:
+            try:
+                n = torch.cuda.device_count()
+                print(f"[INFO] 사용 가능한 GPU: {n}개")
+                for i in range(n):
+                    print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+            except RuntimeError as e:
+                print(f"[ERROR] CUDA 초기화 실패: {e}")
+                print("[HINT] nvidia-smi 로 드라이버 버전 확인 후 570+ 버전으로 업데이트 필요")
+                print("[HINT] RTX 5090(Blackwell)은 CUDA 12.8+ / 드라이버 570+ 필요")
+                raise
+        args.device = device
+
     PreTrainedModel.all_tied_weights_keys = {}
     model = AutoModel.from_pretrained(
-        MODEL_ID, torch_dtype=torch.bfloat16,
+        MODEL_ID, dtype=torch.bfloat16,
         trust_remote_code=True, low_cpu_mem_usage=True,
+        attn_implementation="eager",   # required for output_attentions=True in FastV
     ).eval().to(args.device)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     print("Model loaded.\n")

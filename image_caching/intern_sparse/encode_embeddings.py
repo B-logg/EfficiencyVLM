@@ -90,12 +90,31 @@ def main():
     parser.add_argument("--device",         default="cuda")
     args = parser.parse_args()
 
-    print(f"Loading model: {MODEL_ID}")
+    # ── CUDA 가용성 확인 ──────────────────────────────────────────────────
+    device = args.device
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            print("[WARN] CUDA를 사용할 수 없습니다. CPU로 전환합니다.")
+            device = "cpu"
+        else:
+            try:
+                n = torch.cuda.device_count()
+                print(f"[INFO] 사용 가능한 GPU: {n}개")
+                for i in range(n):
+                    print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+            except RuntimeError as e:
+                print(f"[ERROR] CUDA 초기화 실패: {e}")
+                print("[HINT] nvidia-smi 로 드라이버 버전 확인 후 570+ 버전으로 업데이트 필요")
+                print("[HINT] RTX 5090(Blackwell)은 CUDA 12.8+ / 드라이버 570+ 필요")
+                raise
+
+    print(f"Loading model: {MODEL_ID} (device={device})")
     PreTrainedModel.all_tied_weights_keys = {}
     model = AutoModel.from_pretrained(
-        MODEL_ID, torch_dtype=torch.bfloat16,
+        MODEL_ID, dtype=torch.bfloat16,
         trust_remote_code=True, low_cpu_mem_usage=True,
-    ).eval().to(args.device)
+    ).eval().to(device)
+    args.device = device  # 이후 encode_and_save에 전달
 
     vqav2_samples = load_vqav2(n_total=args.vqav2_n)
     pope_samples  = load_pope(n_per_split=args.pope_n_per_split)

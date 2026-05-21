@@ -73,17 +73,17 @@ STAGE_DEFS = {
         ("ViT",        "t_vit"),
         ("Unshuffle",  "t_unshuffle"),
         ("MLP",        "t_mlp"),
-        ("FastV",      "t_sparse"),
         ("Text",       "t_text"),
         ("Fusion",     "t_fusion"),
+        ("FastV",      "t_sparse"),    # after fusion: needs text tokens for attention
         ("Gen (TTFT)", "t_gen_ttft"),
     ],
     "cached_sparse": [
         ("DB Load",    "t_db_load"),
         ("MLP",        "t_mlp"),
-        ("FastV",      "t_sparse"),
         ("Text",       "t_text"),
         ("Fusion",     "t_fusion"),
+        ("FastV",      "t_sparse"),    # after fusion: needs text tokens for attention
         ("Gen (TTFT)", "t_gen_ttft"),
     ],
 }
