@@ -124,49 +124,71 @@ def load_vqav2(n_total: int = 550, seed: int = 42) -> List[Dict]:
     return samples
 
 
+def _parse_pope_item(item: Dict, split_name: str, idx: int) -> Optional[Dict]:
+    """POPE 단일 아이템을 표준 형식으로 변환. 이미지 없으면 None 반환."""
+    image = item.get("image", None)
+    if image is None:
+        return None
+    label = str(item.get("label", item.get("answer", ""))).lower().strip()
+    if label in ("1", "true"):
+        label = "yes"
+    elif label in ("0", "false"):
+        label = "no"
+    return {
+        "image":      image,
+        "question":   item["question"],
+        "label":      label,
+        "pope_split": split_name,
+        "id":         str(item.get("question_id", f"{split_name}_{idx}")),
+        "dataset":    "pope",
+    }
+
+
 def load_pope(n_per_split: int = 200, seed: int = 42) -> List[Dict]:
     """
-    Load POPE from lmms-lab/POPE, all 3 splits: adversarial, popular, random.
-    Returns shuffled mix of all splits.
+    Load POPE from lmms-lab/POPE (adversarial / popular / random).
+
+    Strategy 1: named config 로딩 (adversarial, popular, random)
+    Strategy 2: 'Full'/'default' 통합 config → category 필드로 분류
     """
     from datasets import load_dataset
+
     splits = ["adversarial", "popular", "random"]
-    all_samples = []
+    all_samples: List[Dict] = []
+
+    # lmms-lab/POPE 실제 구조:
+    #   config = "Full" (또는 "default")
+    #   split  = "adversarial" | "popular" | "random"
+    # → load_dataset("lmms-lab/POPE", "Full", split="adversarial") 형태로 로드
 
     for split_name in splits:
-        print(f"[POPE] Loading {n_per_split} samples from split={split_name}...")
-        try:
-            ds = load_dataset("lmms-lab/POPE", split_name, split="test")
-        except Exception as e:
-            # config-based split 로드 실패 → 해당 split 스킵
-            # fallback 없음: 잘못된 데이터로 3 split을 채우면 정확도 측정이 오염됨
-            print(f"[POPE] '{split_name}' 로드 실패, 스킵: {e}")
-            continue
+        print(f"[POPE] Loading {n_per_split} samples: config=Full, split={split_name}...")
+        ds = None
 
-        ds = ds.shuffle(seed=seed).select(range(min(n_per_split, len(ds))))
+        # 1순위: Full config + split 이름
+        for cfg in ("Full", "default"):
+            try:
+                ds = load_dataset("lmms-lab/POPE", cfg, split=split_name)
+                break
+            except Exception:
+                pass
 
-        for idx, item in enumerate(ds):
-            image = item.get("image", None)
-            if image is None:
+        # 2순위: split을 config 이름으로 쓰는 구버전 형식
+        if ds is None:
+            try:
+                ds = load_dataset("lmms-lab/POPE", split_name, split="test")
+            except Exception as e:
+                print(f"[POPE] '{split_name}' 로드 실패, 스킵: {e}")
                 continue
 
-            # label field: "yes"/"no" or "1"/"0"
-            label = str(item.get("label", item.get("answer", ""))).lower().strip()
-            if label in ("1", "true"):
-                label = "yes"
-            elif label in ("0", "false"):
-                label = "no"
+        ds = ds.shuffle(seed=seed).select(range(min(n_per_split, len(ds))))
+        for idx, item in enumerate(ds):
+            parsed = _parse_pope_item(item, split_name, idx)
+            if parsed:
+                all_samples.append(parsed)
+        print(f"[POPE] '{split_name}': {len(ds)} samples 로드 완료")
 
-            all_samples.append({
-                "image":      image,
-                "question":   item["question"],
-                "label":      label,
-                "pope_split": split_name,
-                "id":         str(item.get("question_id", f"{split_name}_{idx}")),
-                "dataset":    "pope",
-            })
-
-    print(f"[POPE] Loaded {len(all_samples)} samples total ({len(splits)} splits).")
+    print(f"[POPE] 총 {len(all_samples)}개 샘플 로드 완료.")
     return all_samples
 
 
