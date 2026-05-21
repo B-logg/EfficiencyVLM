@@ -268,15 +268,15 @@ def compute_accuracy_summary(results_dir: str) -> Dict[str, Dict[str, float]]:
 
         # POPE
         df_pope = load_csv(results_dir, pl, "pope")
-        if df_pope is not None and "pope_correct" in df_pope.columns:
-            # Compute F1 from raw predictions and labels
+        if df_pope is not None and "pope_label" in df_pope.columns:
+            # extract_pope_answer와 동일한 로직으로 파싱 (word boundary 사용)
+            # → 실험 런타임의 F1과 일치하도록 보장
+            from dataset_utils import compute_pope_metrics, extract_pope_answer
             preds  = df_pope["prediction"].apply(
-                lambda x: "yes" if "yes" in str(x).lower() else
-                          "no"  if "no"  in str(x).lower() else "unknown"
+                lambda x: extract_pope_answer(str(x))
             ).tolist()
             labels = df_pope["pope_label"].tolist()
             if preds:
-                from dataset_utils import compute_pope_metrics
                 m = compute_pope_metrics(preds, labels)
                 summary[pl]["pope_f1"] = m["f1"] * 100
 

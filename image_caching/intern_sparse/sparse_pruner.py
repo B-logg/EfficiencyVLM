@@ -1,16 +1,23 @@
 """
-True FastV-style visual token pruner.
+FastV-inspired visual token pruner.
 
-Mechanism (FastV paper: Zheng et al., 2024):
-  1. Run LLM layers 0..K with output_attentions=True at layer K
-  2. importance[v] = mean over heads and text positions of attn[text → visual[v]]
-  3. Keep top keep_ratio visual tokens; discard the rest
-  4. Return pruned f_embs for full generate()
+Reference: "An Image is Worth 1/2 Tokens After Layer 2"
+           Liang Chen et al., ECCV 2024  (arXiv 2403.06764)
 
-Key difference from norm-based pruning:
-  - Uses text→visual cross-attention (query-guided, context-aware)
-  - Pruning happens AFTER fusion (text tokens needed for attention computation)
-  - Requires attn_implementation="eager" (FlashAttention does not return weights)
+Mechanism:
+  1. Run LLM layers 0..K (causal mask, position_ids, use_cache=False)
+     with output_attentions=True at layer K
+  2. importance[v] = mean attention received by visual token v
+                     averaged over ALL query positions and ALL heads
+     (paper criterion: column-mean of attention matrix at layer K)
+  3. Keep top keep_ratio visual tokens; prune the rest from original f_embs
+  4. Feed pruned f_embs to generate() → full N-layer inference with fewer tokens
+
+Note on implementation vs paper:
+  - Paper: single forward pass, prune mid-inference at layer K, continue K+1..N
+  - This implementation: K-layer pre-pass for importance, then full generate with pruned input
+  - Token SELECTION is logically equivalent; timing overhead differs
+  - Requires attn_implementation="eager" (FlashAttention does not expose attn weights)
 
 Settings: prune_layer=8, keep_ratio=0.5  →  256 → 128 visual tokens
 """
@@ -18,6 +25,44 @@ import time
 from typing import Optional, Tuple
 
 import torch
+
+
+def _make_causal_mask(
+    lm_model,
+    f_embs: torch.Tensor,
+    seq_len: int,
+    dtype: torch.dtype,
+    device: str,
+) -> torch.Tensor:
+    """
+    Returns 4D additive causal mask [1, 1, seq_len, seq_len].
+    Tries the model's own _update_causal_mask first (version-safe),
+    falls back to manual construction if unavailable.
+    """
+    # 1순위: 모델 내부 메서드 (transformers 버전별 포맷 차이 없이 안전)
+    if hasattr(lm_model, "_update_causal_mask"):
+        try:
+            cache_position = torch.arange(seq_len, dtype=torch.long, device=device)
+            mask = lm_model._update_causal_mask(
+                attention_mask=None,
+                input_tensor=f_embs,
+                cache_position=cache_position,
+                past_key_values=None,
+                output_attentions=False,
+            )
+            if mask is not None:
+                return mask
+        except Exception:
+            pass  # fallthrough to manual
+
+    # 2순위: 표준 additive causal mask (0=attend, -inf=block)
+    mask = torch.full(
+        (1, 1, seq_len, seq_len),
+        torch.finfo(dtype).min,
+        dtype=dtype,
+        device=device,
+    )
+    return mask.triu(diagonal=1)   # upper-tri = -inf, lower+diag = 0
 
 
 class FastVPruner:
@@ -55,17 +100,10 @@ class FastVPruner:
         vis_end = vis_start + n_visual
         dtype   = f_embs.dtype
 
-        # ── 4D causal mask  [1, 1, seq_len, seq_len] ─────────────────────────
-        # Convention (added to raw attn scores before softmax):
-        #   0    = "can attend" (current token + past tokens)
-        #   -inf = "masked"    (future tokens)
-        # triu(diagonal=1): upper-triangle = -inf, lower+diagonal = 0
-        causal_mask = torch.full(
-            (1, 1, seq_len, seq_len),
-            torch.finfo(dtype).min,
-            dtype=dtype, device=device,
-        )
-        causal_mask = causal_mask.triu(diagonal=1)
+        # ── 4D causal mask ────────────────────────────────────────────────────
+        # 모델 자체의 _update_causal_mask 우선 사용 (버전 호환성 보장)
+        # 없으면 표준 additive causal mask 수동 구성
+        causal_mask = _make_causal_mask(lm_model, f_embs, seq_len, dtype, device)
 
         position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
 
@@ -86,16 +124,23 @@ class FastVPruner:
             if is_K and len(out) > 1:
                 attn_at_K = out[1]        # [1, n_heads, seq_len, seq_len]
 
-        # ── Compute visual token importance ───────────────────────────────────
-        # Prompt layout: "User: " [vis_tokens] "\nquestion\n...\nAssistant:"
-        # Text tokens AFTER visual (indices vis_end .. seq_len-1) attend to visual
-        # via causal attention (they appear later in the sequence).
+        # ── Compute visual token importance (paper criterion) ────────────────
+        # FastV paper: importance[v] = mean attention received by visual token v
+        #              averaged over ALL query positions and ALL heads.
+        #
+        # Causal attention ensures:
+        #   - pre-visual positions (0..vis_start-1) → visual: softmax ≈ 0 (future blocked)
+        #   - visual positions (vis_start..vis_end-1) → earlier visual: non-zero (causal)
+        #   - post-visual text (vis_end..seq_len-1)  → visual: non-zero (past visible)
+        #
+        # Using all positions (not just text) matches the paper and preserves
+        # spatial importance signals from visual self-attention.
         n_keep = max(1, int(n_visual * self.keep_ratio))
 
-        if attn_at_K is not None and vis_end < seq_len:
-            # text_to_vis: [n_heads, n_text_post, n_visual]
-            text_to_vis = attn_at_K[0, :, vis_end:, vis_start:vis_end]
-            importance  = text_to_vis.mean(dim=(0, 1))   # [n_visual]
+        if attn_at_K is not None:
+            # all_to_vis: [n_heads, seq_len, n_visual]
+            all_to_vis = attn_at_K[0, :, :, vis_start:vis_end]
+            importance = all_to_vis.mean(dim=(0, 1))   # [n_visual]
         else:
             # Fallback: L2 norm of visual hidden states at layer K
             importance = hidden[0, vis_start:vis_end, :].norm(dim=-1)

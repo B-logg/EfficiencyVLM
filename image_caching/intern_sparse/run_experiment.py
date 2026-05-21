@@ -401,6 +401,8 @@ def run_pipeline_on_dataset(
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats()
 
+            in_warmup = warmup_done < N_WARMUP
+
             try:
                 if use_cache:
                     res = run_cached(item, model, tokenizer, device, dataset_name, embed_dir, pruner)
@@ -408,14 +410,18 @@ def run_pipeline_on_dataset(
                     res = run_baseline(item, model, tokenizer, device, dataset_name, pruner)
             except Exception as e:
                 print(f"[WARN] Sample {item['id']} failed: {e}")
+                if in_warmup:
+                    warmup_done += 1   # 실패도 웜업 카운트에 포함
                 continue
 
             if res is None:
-                print(f"[WARN] Embedding not found for {item['id']}, skipping.")
+                if in_warmup:
+                    warmup_done += 1
+                else:
+                    print(f"[WARN] Embedding not found for {item['id']}, skipping.")
                 continue
 
-            is_warmup = warmup_done < N_WARMUP
-            if is_warmup:
+            if in_warmup:
                 warmup_done += 1
                 continue
 

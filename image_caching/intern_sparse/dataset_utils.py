@@ -46,9 +46,10 @@ def _process_punctuation(s: str) -> str:
 
 def normalize_vqa_answer(s: str) -> str:
     s = s.lower().strip()
-    s = _CONTRACTIONS.get(s, s)
     s = _process_punctuation(s)
-    tokens = [t for t in s.split() if t not in _ARTICLES]
+    # contractions: apply word-by-word (not just whole-string match)
+    tokens = [_CONTRACTIONS.get(t, t) for t in s.split()]
+    tokens = [t for t in tokens if t not in _ARTICLES]
     return " ".join(tokens).strip()
 
 
@@ -136,12 +137,11 @@ def load_pope(n_per_split: int = 200, seed: int = 42) -> List[Dict]:
         print(f"[POPE] Loading {n_per_split} samples from split={split_name}...")
         try:
             ds = load_dataset("lmms-lab/POPE", split_name, split="test")
-        except Exception as e1:
-            try:
-                ds = load_dataset("lmms-lab/POPE", split="test")
-            except Exception as e2:
-                print(f"[POPE] {split_name} 로드 실패: {e2}")
-                continue
+        except Exception as e:
+            # config-based split 로드 실패 → 해당 split 스킵
+            # fallback 없음: 잘못된 데이터로 3 split을 채우면 정확도 측정이 오염됨
+            print(f"[POPE] '{split_name}' 로드 실패, 스킵: {e}")
+            continue
 
         ds = ds.shuffle(seed=seed).select(range(min(n_per_split, len(ds))))
 
