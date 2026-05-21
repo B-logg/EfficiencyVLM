@@ -109,8 +109,8 @@ def pixel_shuffle_2x(vit_embs: torch.Tensor) -> torch.Tensor:
 
 def make_prompt_tokens(tokenizer, question: str, dataset: str, device):
     """
-    InternVL format: 'User: ' + [visual] + '\n{question}\n{instruction}\nAssistant:'
-    Returns (tok_pre, tok_post) as token IDs.
+    InternVL3.5 / Qwen3 chat template:
+        <|im_start|>user\n[visual tokens]\n{question}\n{instruction}<|im_end|>\n<|im_start|>assistant\n
     """
     if dataset == "vqav2":
         instruction = "Answer with a single word or short phrase."
@@ -118,11 +118,11 @@ def make_prompt_tokens(tokenizer, question: str, dataset: str, device):
         instruction = "Answer yes or no."
 
     tok_pre  = tokenizer(
-        "User: ",
+        "<|im_start|>user\n",
         return_tensors="pt", add_special_tokens=True,
     ).input_ids.to(device)
     tok_post = tokenizer(
-        f"\n{question}\n{instruction}\nAssistant:",
+        f"\n{question}\n{instruction}<|im_end|>\n<|im_start|>assistant\n",
         return_tensors="pt", add_special_tokens=False,
     ).input_ids.to(device)
     return tok_pre, tok_post
