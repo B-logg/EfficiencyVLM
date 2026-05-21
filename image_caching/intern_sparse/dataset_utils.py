@@ -67,38 +67,59 @@ def vqa_accuracy(pred: str, gt_answers: List[str]) -> float:
 def load_vqav2(n_total: int = 550, seed: int = 42) -> List[Dict]:
     """
     Load VQAv2 validation samples with embedded PIL images.
-    Returns list of dicts with keys: image, question, answers, id.
+    HuggingFaceM4/VQAv2 uses a loading script (not supported in datasets>=2.x).
+    Uses lmms-lab/VQAv2 (Parquet format) instead.
     """
     from datasets import load_dataset
-    print(f"[VQAv2] Loading {n_total} samples from HuggingFaceM4/VQAv2 (validation)...")
-    ds = load_dataset(
-        "HuggingFaceM4/VQAv2",
-        split="validation",
-        trust_remote_code=True,
-    )
+
+    # lmms-lab/VQAv2: Parquet format, no loading script required
+    # split name may vary; try both "validation" and "val"
+    ds = None
+    for split_name in ("validation", "val"):
+        try:
+            print(f"[VQAv2] Trying lmms-lab/VQAv2 split={split_name}...")
+            ds = load_dataset("lmms-lab/VQAv2", split=split_name)
+            print(f"[VQAv2] OK: lmms-lab/VQAv2 ({split_name}), {len(ds)} samples")
+            break
+        except Exception as e:
+            print(f"[VQAv2] {split_name} 실패: {e}")
+
+    if ds is None:
+        raise RuntimeError(
+            "[VQAv2] 데이터셋 로드 실패.\n"
+            "  확인: huggingface-cli login 또는\n"
+            "  pip install -U datasets 후 재시도"
+        )
+
     ds = ds.shuffle(seed=seed).select(range(min(n_total, len(ds))))
 
     samples = []
     for item in ds:
-        # answers field: list of {"answer_id": int, "answer": str, "answer_confidence": str}
-        raw_answers = item.get("answers", [])
-        if isinstance(raw_answers, list) and len(raw_answers) > 0:
-            if isinstance(raw_answers[0], dict):
-                answers = [a["answer"] for a in raw_answers]
+        # answers: list[str] | list[dict] | str — 포맷 무관하게 처리
+        raw = item.get("answers", item.get("multiple_choice_answer", []))
+        if isinstance(raw, list) and len(raw) > 0:
+            if isinstance(raw[0], dict):
+                answers = [a.get("answer", "") for a in raw]
             else:
-                answers = list(raw_answers)
+                answers = [str(a) for a in raw]
+        elif isinstance(raw, str) and raw:
+            answers = [raw]
         else:
-            answers = [item.get("multiple_choice_answer", "")]
+            answers = []
+
+        image = item.get("image", item.get("img", None))
+        if image is None:
+            continue
 
         samples.append({
-            "image":    item["image"],
+            "image":    image,
             "question": item["question"],
             "answers":  answers,
             "id":       str(item.get("question_id", item.get("id", len(samples)))),
             "dataset":  "vqav2",
         })
 
-    print(f"[VQAv2] Loaded {len(samples)} samples.")
+    print(f"[VQAv2] {len(samples)}개 샘플 로드 완료.")
     return samples
 
 
@@ -114,15 +135,13 @@ def load_pope(n_per_split: int = 200, seed: int = 42) -> List[Dict]:
     for split_name in splits:
         print(f"[POPE] Loading {n_per_split} samples from split={split_name}...")
         try:
-            ds = load_dataset(
-                "lmms-lab/POPE",
-                split_name,
-                split="test",
-                trust_remote_code=True,
-            )
-        except Exception:
-            # Fallback: try without config name
-            ds = load_dataset("lmms-lab/POPE", split="test", trust_remote_code=True)
+            ds = load_dataset("lmms-lab/POPE", split_name, split="test")
+        except Exception as e1:
+            try:
+                ds = load_dataset("lmms-lab/POPE", split="test")
+            except Exception as e2:
+                print(f"[POPE] {split_name} 로드 실패: {e2}")
+                continue
 
         ds = ds.shuffle(seed=seed).select(range(min(n_per_split, len(ds))))
 
