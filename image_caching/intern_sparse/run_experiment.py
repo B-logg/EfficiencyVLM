@@ -193,10 +193,15 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     torch.cuda.synchronize()
     r_fus = t_fus.get_time()
 
-    # 7. [FastV] — runs AFTER fusion so text tokens are present for attention
+    # 7 & 8. [FastV prefill+prune] → Decode   OR   standard Generate
+    mnt      = max_new_tokens_for(dataset)
     r_sparse = 0.0
+    r_ttft   = 0.0
+
     if pruner is not None:
-        f_embs, f_mask, r_sparse_ms = pruner.prune(
+        # Single-pass FastV:
+        #   prefill all tokens (all layers) → prune KV cache → get first token
+        first_token, pruned_kvs, pruned_mask, r_sparse_ms = pruner.prefill_and_prune(
             lm_model  = model.language_model,
             f_embs    = f_embs,
             f_mask    = f_mask,
@@ -204,26 +209,59 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
             n_visual  = n_vis,
             device    = device,
         )
-        r_sparse = r_sparse_ms / 1000.0   # ms → s
+        r_sparse = r_sparse_ms / 1000.0   # ms → s  (covers prefill + prune + tok1)
 
-    # 8. Generate
-    hnd   = TTFTLogitsProcessor()
-    t_gen = CUDATimer(); t_gen.start()
-    outs  = model.language_model.generate(
-        inputs_embeds=f_embs, attention_mask=f_mask,
-        max_new_tokens=max_new_tokens_for(dataset),
-        logits_processor=LogitsProcessorList([hnd]),
-        do_sample=False,
-    )
-    t_gen.stop()
-    torch.cuda.synchronize()
+        # Decode: generate remaining tokens using the pruned KV cache.
+        # first_token is the already-computed first output token; generate()
+        # processes it as input (one decode step) and produces mnt-1 more.
+        ext_mask = torch.cat([
+            pruned_mask,
+            torch.ones((1, 1), dtype=pruned_mask.dtype, device=device),
+        ], dim=1)   # extend mask for the incoming first_token position
+        t_gen = CUDATimer(); t_gen.start()
+        if mnt > 1:
+            outs = model.language_model.generate(
+                input_ids       = first_token,
+                past_key_values = pruned_kvs,
+                attention_mask  = ext_mask,
+                max_new_tokens  = mnt - 1,   # first token already generated
+                do_sample       = False,
+            )
+            # outs = [first_token, tok2, ..., tok_mnt]  (includes first_token)
+        else:
+            outs = first_token
+        t_gen.stop()
+        torch.cuda.synchronize()
 
-    r_ttft   = t_gen.s.elapsed_time(hnd.evt) / 1000.0
-    r_decode = max(t_gen.get_time() - r_ttft, 0.0)
-    true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_text + r_fus + r_sparse + r_ttft
-    total_lat = true_ttft + r_decode
-    n_tok     = max(outs.shape[1] - 1, 1)
-    tpot      = r_decode / n_tok
+        # TTFT = everything up to and including the prune phase (first token is
+        # ready at the end of prefill_and_prune, not inside generate()).
+        r_decode  = t_gen.get_time()
+        true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_text + r_fus + r_sparse
+        total_lat = true_ttft + r_decode
+        n_tok     = max(outs.shape[1] - 1, 1)
+        tpot      = r_decode / n_tok
+
+    else:
+        # Standard generate (baseline / cached without FastV).
+        # TTFTLogitsProcessor fires on the first logit → measures prefill time.
+        hnd   = TTFTLogitsProcessor()
+        t_gen = CUDATimer(); t_gen.start()
+        outs  = model.language_model.generate(
+            inputs_embeds    = f_embs,
+            attention_mask   = f_mask,
+            max_new_tokens   = mnt,
+            logits_processor = LogitsProcessorList([hnd]),
+            do_sample        = False,
+        )
+        t_gen.stop()
+        torch.cuda.synchronize()
+
+        r_ttft    = t_gen.s.elapsed_time(hnd.evt) / 1000.0
+        r_decode  = max(t_gen.get_time() - r_ttft, 0.0)
+        true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_text + r_fus + r_ttft
+        total_lat = true_ttft + r_decode
+        n_tok     = max(outs.shape[1] - 1, 1)
+        tpot      = r_decode / n_tok
 
     pred_text = tokenizer.decode(outs[0], skip_special_tokens=True).strip()
 
@@ -294,10 +332,13 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
     torch.cuda.synchronize()
     r_fus = t_fus.get_time()
 
-    # 5. [FastV] — runs AFTER fusion so text tokens are present for attention
+    # 5 & 6. [FastV prefill+prune] → Decode   OR   standard Generate
+    mnt      = max_new_tokens_for(dataset)
     r_sparse = 0.0
+    r_ttft   = 0.0
+
     if pruner is not None:
-        f_embs, f_mask, r_sparse_ms = pruner.prune(
+        first_token, pruned_kvs, pruned_mask, r_sparse_ms = pruner.prefill_and_prune(
             lm_model  = model.language_model,
             f_embs    = f_embs,
             f_mask    = f_mask,
@@ -305,26 +346,51 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
             n_visual  = n_vis,
             device    = device,
         )
-        r_sparse = r_sparse_ms / 1000.0   # ms → s
+        r_sparse = r_sparse_ms / 1000.0
 
-    # 6. Generate
-    hnd   = TTFTLogitsProcessor()
-    t_gen = CUDATimer(); t_gen.start()
-    outs  = model.language_model.generate(
-        inputs_embeds=f_embs, attention_mask=f_mask,
-        max_new_tokens=max_new_tokens_for(dataset),
-        logits_processor=LogitsProcessorList([hnd]),
-        do_sample=False,
-    )
-    t_gen.stop()
-    torch.cuda.synchronize()
+        ext_mask = torch.cat([
+            pruned_mask,
+            torch.ones((1, 1), dtype=pruned_mask.dtype, device=device),
+        ], dim=1)
+        t_gen = CUDATimer(); t_gen.start()
+        if mnt > 1:
+            outs = model.language_model.generate(
+                input_ids       = first_token,
+                past_key_values = pruned_kvs,
+                attention_mask  = ext_mask,
+                max_new_tokens  = mnt - 1,
+                do_sample       = False,
+            )
+        else:
+            outs = first_token
+        t_gen.stop()
+        torch.cuda.synchronize()
 
-    r_ttft   = t_gen.s.elapsed_time(hnd.evt) / 1000.0
-    r_decode = max(t_gen.get_time() - r_ttft, 0.0)
-    true_ttft = r_db + r_mlp + r_text + r_fus + r_sparse + r_ttft
-    total_lat = true_ttft + r_decode
-    n_tok     = max(outs.shape[1] - 1, 1)
-    tpot      = r_decode / n_tok
+        r_decode  = t_gen.get_time()
+        true_ttft = r_db + r_mlp + r_text + r_fus + r_sparse
+        total_lat = true_ttft + r_decode
+        n_tok     = max(outs.shape[1] - 1, 1)
+        tpot      = r_decode / n_tok
+
+    else:
+        hnd   = TTFTLogitsProcessor()
+        t_gen = CUDATimer(); t_gen.start()
+        outs  = model.language_model.generate(
+            inputs_embeds    = f_embs,
+            attention_mask   = f_mask,
+            max_new_tokens   = mnt,
+            logits_processor = LogitsProcessorList([hnd]),
+            do_sample        = False,
+        )
+        t_gen.stop()
+        torch.cuda.synchronize()
+
+        r_ttft    = t_gen.s.elapsed_time(hnd.evt) / 1000.0
+        r_decode  = max(t_gen.get_time() - r_ttft, 0.0)
+        true_ttft = r_db + r_mlp + r_text + r_fus + r_ttft
+        total_lat = true_ttft + r_decode
+        n_tok     = max(outs.shape[1] - 1, 1)
+        tpot      = r_decode / n_tok
 
     pred_text = tokenizer.decode(outs[0], skip_special_tokens=True).strip()
 
