@@ -159,7 +159,7 @@ def _apply_fastv_patch() -> None:
                 "position_ids": position_ids,
             }
             causal_mask_mapping = {"full_attention": _create_causal_mask(**mk)}
-            if self.has_sliding_layers and _create_sw_mask is not None:
+            if getattr(self, "has_sliding_layers", False) and _create_sw_mask is not None:
                 causal_mask_mapping["sliding_attention"] = _create_sw_mask(**mk)
 
             hidden_states       = inputs_embeds
@@ -170,9 +170,10 @@ def _apply_fastv_patch() -> None:
             ):
                 # ── FastV pruning at layer K ─────────────────────────────────
                 if layer_idx == fastv_prune_layer:
+                    _attn_key = getattr(decoder_layer, "attention_type", "full_attention")
                     hidden_states, attn_weights = decoder_layer(
                         hidden_states,
-                        attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                        attention_mask=causal_mask_mapping.get(_attn_key, causal_mask_mapping["full_attention"]),
                         position_ids=position_ids,
                         past_key_values=past_key_values,
                         use_cache=use_cache,
@@ -227,16 +228,17 @@ def _apply_fastv_patch() -> None:
                     causal_mask_mapping = {
                         "full_attention": _create_causal_mask(**mk_p)
                     }
-                    if self.has_sliding_layers and _create_sw_mask is not None:
+                    if getattr(self, "has_sliding_layers", False) and _create_sw_mask is not None:
                         causal_mask_mapping["sliding_attention"] = _create_sw_mask(**mk_p)
 
                     position_embeddings = self.rotary_emb(hidden_states, position_ids)
                     continue   # layer K already processed above
 
                 # ── Normal layer ─────────────────────────────────────────────
+                _attn_key = getattr(decoder_layer, "attention_type", "full_attention")
                 hidden_states = decoder_layer(
                     hidden_states,
-                    attention_mask=causal_mask_mapping[decoder_layer.attention_type],
+                    attention_mask=causal_mask_mapping.get(_attn_key, causal_mask_mapping["full_attention"]),
                     position_ids=position_ids,
                     past_key_values=past_key_values,
                     use_cache=use_cache,
