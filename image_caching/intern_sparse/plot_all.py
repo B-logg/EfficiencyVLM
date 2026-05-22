@@ -48,6 +48,7 @@ STAGE_COLORS = {
     "Text":         "#bcbd22",
     "Fusion":       "#8c564b",
     "Gen (TTFT)":   "#e377c2",
+    "Decode":       "#7f7f7f",
 }
 
 # Stage definitions per pipeline: (label, csv_column)
@@ -75,16 +76,16 @@ STAGE_DEFS = {
         ("MLP",        "t_mlp"),
         ("Text",       "t_text"),
         ("Fusion",     "t_fusion"),
-        ("FastV",      "t_sparse"),    # after fusion: needs text tokens for attention
-        ("Gen (TTFT)", "t_gen_ttft"),
+        ("FastV",      "t_sparse"),    # prefill+prune+first-token (= TTFT for sparse)
+        ("Decode",     "decode_time"), # remaining tokens after first (t_gen_ttft=0 for sparse)
     ],
     "cached_sparse": [
         ("DB Load",    "t_db_load"),
         ("MLP",        "t_mlp"),
         ("Text",       "t_text"),
         ("Fusion",     "t_fusion"),
-        ("FastV",      "t_sparse"),    # after fusion: needs text tokens for attention
-        ("Gen (TTFT)", "t_gen_ttft"),
+        ("FastV",      "t_sparse"),    # prefill+prune+first-token (= TTFT for sparse)
+        ("Decode",     "decode_time"), # remaining tokens after first (t_gen_ttft=0 for sparse)
     ],
 }
 

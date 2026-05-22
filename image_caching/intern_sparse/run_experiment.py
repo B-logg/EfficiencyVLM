@@ -107,24 +107,42 @@ def pixel_shuffle_2x(vit_embs: torch.Tensor) -> torch.Tensor:
 
 # ── Prompt helpers ────────────────────────────────────────────────────────────
 
-def make_prompt_tokens(tokenizer, question: str, dataset: str, device):
+def make_prompt_tokens(tokenizer, question: str, dataset: str, device, n_visual: int = 256):
     """
-    InternVL3.5 / Qwen3 chat template:
-        <|im_start|>user\n[visual tokens]\n{question}\n{instruction}<|im_end|>\n<|im_start|>assistant\n
+    InternVL3.5 native format with <IMG_CONTEXT> tokens:
+        <|im_start|>user\n<img><IMG_CONTEXT>×N</img>\n{question}\n{instruction}<|im_end|>\n<|im_start|>assistant\n
+
+    InternVL3.5 is trained to replace <IMG_CONTEXT> positions with ViT features.
+    <img> / </img> mark the visual block boundary.
+    We tokenize the full prompt (including <IMG_CONTEXT>×N), find the IMG_CONTEXT
+    positions, then split into tok_pre (before) and tok_post (after) so that our
+    existing code can inject img_embs at those positions — exactly as InternVL does
+    internally.  vis_start = tok_pre.shape[1] is computed automatically.
     """
     if dataset == "vqav2":
         instruction = "Answer with a single word or short phrase."
     else:
         instruction = "Answer yes or no."
 
-    tok_pre  = tokenizer(
-        "<|im_start|>user\n",
-        return_tensors="pt", add_special_tokens=True,
-    ).input_ids.to(device)
-    tok_post = tokenizer(
-        f"\n{question}\n{instruction}<|im_end|>\n<|im_start|>assistant\n",
-        return_tensors="pt", add_special_tokens=False,
-    ).input_ids.to(device)
+    img_ctx_id = tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+
+    # Build full prompt with IMG_CONTEXT placeholders
+    img_block = "<img>" + "<IMG_CONTEXT>" * n_visual + "</img>"
+    full_prompt = (
+        f"<|im_start|>user\n{img_block}\n"
+        f"{question}\n{instruction}<|im_end|>\n<|im_start|>assistant\n"
+    )
+    full_ids = tokenizer(
+        full_prompt, return_tensors="pt", add_special_tokens=True,
+    ).input_ids.to(device)   # [1, total_seq]
+
+    # Locate first <IMG_CONTEXT> token → that is vis_start
+    is_img = (full_ids[0] == img_ctx_id)
+    vis_start = int(is_img.nonzero()[0].item())
+
+    tok_pre  = full_ids[:, :vis_start]               # everything before visual
+    tok_post = full_ids[:, vis_start + n_visual:]     # everything after visual
+
     return tok_pre, tok_post
 
 
@@ -170,10 +188,11 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
     torch.cuda.synchronize()
     r_mlp = t_mlp.get_time()
 
-    # 5. Text tokenize + embed
+    # 5. Text tokenize + embed  (includes <IMG_CONTEXT> positions in tok_pre/post)
     torch.cuda.synchronize()
     _t = time.perf_counter()
-    tok_pre, tok_post = make_prompt_tokens(tokenizer, question, dataset, device)
+    n_vis = img_embs.shape[0]              # 256 before pruning
+    tok_pre, tok_post = make_prompt_tokens(tokenizer, question, dataset, device, n_visual=n_vis)
     emb_pre  = model.language_model.get_input_embeddings()(tok_pre)
     emb_post = model.language_model.get_input_embeddings()(tok_post)
     torch.cuda.synchronize()
@@ -181,7 +200,6 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
 
     # 6. Fusion  →  f_embs [1, seq_len, D],  f_mask [1, seq_len]
     t_fus = CUDATimer(); t_fus.start()
-    n_vis     = img_embs.shape[0]          # 256 before pruning
     vis_start = tok_pre.shape[1]           # index where visual tokens begin
     f_embs = torch.cat([emb_pre, img_embs.unsqueeze(0), emb_post], dim=1)
     f_mask = torch.cat([
@@ -209,41 +227,38 @@ def run_baseline(item, model, tokenizer, device, dataset, pruner=None):
             n_visual  = n_vis,
             device    = device,
         )
-        r_sparse = r_sparse_ms / 1000.0   # ms → s  (covers prefill + prune + tok1)
+        # FastV phase covers: prefill (all layers) + KV prune + first token
+        # → this IS the Gen TTFT (LLM input to first token out).
+        r_ttft   = r_sparse_ms / 1000.0   # Gen (TTFT) = FastV phase duration
+        r_sparse = 0.0                     # no separate "FastV overhead" column
 
         # Decode: generate remaining tokens using the pruned KV cache.
-        # first_token is the already-computed first output token; generate()
-        # processes it as input (one decode step) and produces mnt-1 more.
         ext_mask = torch.cat([
             pruned_mask,
             torch.ones((1, 1), dtype=pruned_mask.dtype, device=device),
-        ], dim=1)   # extend mask for the incoming first_token position
+        ], dim=1)
         t_gen = CUDATimer(); t_gen.start()
         if mnt > 1:
             outs = model.language_model.generate(
                 input_ids       = first_token,
                 past_key_values = pruned_kvs,
                 attention_mask  = ext_mask,
-                max_new_tokens  = mnt - 1,   # first token already generated
+                max_new_tokens  = mnt - 1,
                 do_sample       = False,
             )
-            # outs = [first_token, tok2, ..., tok_mnt]  (includes first_token)
         else:
             outs = first_token
         t_gen.stop()
         torch.cuda.synchronize()
 
-        # TTFT = everything up to and including the prune phase (first token is
-        # ready at the end of prefill_and_prune, not inside generate()).
         r_decode  = t_gen.get_time()
-        true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_text + r_fus + r_sparse
+        true_ttft = r_preproc + r_vit + r_unsh + r_mlp + r_text + r_fus + r_ttft
         total_lat = true_ttft + r_decode
         n_tok     = max(outs.shape[1] - 1, 1)
         tpot      = r_decode / n_tok
 
     else:
-        # Standard generate (baseline / cached without FastV).
-        # TTFTLogitsProcessor fires on the first logit → measures prefill time.
+        # Standard generate: TTFTLogitsProcessor fires on first logit.
         hnd   = TTFTLogitsProcessor()
         t_gen = CUDATimer(); t_gen.start()
         outs  = model.language_model.generate(
@@ -309,10 +324,11 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
     torch.cuda.synchronize()
     r_mlp = t_mlp.get_time()
 
-    # 3. Text tokenize + embed
+    # 3. Text tokenize + embed  (includes <IMG_CONTEXT> positions in tok_pre/post)
     torch.cuda.synchronize()
     _t = time.perf_counter()
-    tok_pre, tok_post = make_prompt_tokens(tokenizer, question, dataset, device)
+    n_vis = img_embs.shape[0]              # 256 before pruning
+    tok_pre, tok_post = make_prompt_tokens(tokenizer, question, dataset, device, n_visual=n_vis)
     emb_pre  = model.language_model.get_input_embeddings()(tok_pre)
     emb_post = model.language_model.get_input_embeddings()(tok_post)
     torch.cuda.synchronize()
@@ -320,7 +336,6 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
 
     # 4. Fusion  →  f_embs [1, seq_len, D],  f_mask [1, seq_len]
     t_fus = CUDATimer(); t_fus.start()
-    n_vis     = img_embs.shape[0]          # 256 before pruning
     vis_start = tok_pre.shape[1]           # index where visual tokens begin
     f_embs = torch.cat([emb_pre, img_embs.unsqueeze(0), emb_post], dim=1)
     f_mask = torch.cat([
@@ -346,7 +361,8 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
             n_visual  = n_vis,
             device    = device,
         )
-        r_sparse = r_sparse_ms / 1000.0
+        r_ttft   = r_sparse_ms / 1000.0   # Gen (TTFT) = FastV phase duration
+        r_sparse = 0.0
 
         ext_mask = torch.cat([
             pruned_mask,
@@ -367,7 +383,7 @@ def run_cached(item, model, tokenizer, device, dataset, embed_dir, pruner=None):
         torch.cuda.synchronize()
 
         r_decode  = t_gen.get_time()
-        true_ttft = r_db + r_mlp + r_text + r_fus + r_sparse
+        true_ttft = r_db + r_mlp + r_text + r_fus + r_ttft
         total_lat = true_ttft + r_decode
         n_tok     = max(outs.shape[1] - 1, 1)
         tpot      = r_decode / n_tok
