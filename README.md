@@ -2,7 +2,7 @@
 
 ## 개요
 
-InternVL3.5-8B를 이용해 비디오 이해 파이프라인의 **FPS / num_frames 별 latency·정확도** 트레이드오프를 측정하는 실험 코드.
+InternVL3.5-8B를 이용해 비디오 이해 파이프라인의 **FPS / num_frames 별 latency·정확도** 트레이드오프를 측정하는 실험
 
 - **모델**: `OpenGVLab/InternVL3_5-8B` (bfloat16, transformers==4.51.3)
 - **데이터셋**: MSRVTT-QA test split + MVBench (20개 sub-task)
